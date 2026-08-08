@@ -687,6 +687,8 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Bloquear agora não espera alerta.
 
+- [x] Implementar helper de cálculo de alertas e validar em testes automatizados.
+
 ## Fase 6 — Interface local e senha
 
 **Entregas**
