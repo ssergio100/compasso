@@ -95,6 +95,25 @@ func TestAdministrativeWorkflowAndCSRF(t *testing.T) {
 		!strings.Contains(allowancePage.Body.String(), "data-remaining-seconds=\"29400\"") {
 		t.Fatalf("page did not keep quota fixed while adding extra time to remaining: status=%d", allowancePage.Code)
 	}
+	statusResponse := fixture.get("/api/v1/admin/devices/" + deviceID + "/status")
+	var liveStatus deviceLiveStatus
+	if statusResponse.Code != http.StatusOK {
+		t.Fatalf("live status code=%d body=%s", statusResponse.Code, statusResponse.Body.String())
+	}
+	if err := json.Unmarshal(statusResponse.Body.Bytes(), &liveStatus); err != nil {
+		t.Fatal(err)
+	}
+	if liveStatus.TodayQuotaSeconds != 8*60*60 || liveStatus.RemainingSeconds != 8*60*60+10*60 {
+		t.Fatalf("unexpected live status: %+v", liveStatus)
+	}
+	unauthenticatedStatus := httptest.NewRecorder()
+	fixture.app.ServeHTTP(
+		unauthenticatedStatus,
+		httptest.NewRequest(http.MethodGet, "/api/v1/admin/devices/"+deviceID+"/status", nil),
+	)
+	if unauthenticatedStatus.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated live status code=%d, want 401", unauthenticatedStatus.Code)
+	}
 
 	routineValues := url.Values{
 		"name": {"Dormir"}, "start": {"22:00"}, "end": {"08:00"},

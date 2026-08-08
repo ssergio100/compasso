@@ -49,7 +49,10 @@
 <section class="summary-grid">
   <div class="card metric featured">
     <span>Tempo restante</span>
-    <strong id="remaining-time" data-remaining-seconds="{{.Remaining}}" data-counting="{{.Counting}}">{{duration .Remaining}}</strong>
+    <strong id="remaining-time"
+      data-remaining-seconds="{{.Remaining}}"
+      data-counting="{{.Counting}}"
+      data-status-url="/api/v1/admin/devices/{{.Device.ID}}/status">{{duration .Remaining}}</strong>
   </div>
   <div class="card metric">
     <span>Cota de hoje</span>

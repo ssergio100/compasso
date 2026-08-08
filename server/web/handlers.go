@@ -1,6 +1,8 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +15,17 @@ import (
 	"github.com/sergio/compasso/agent/policy"
 	"github.com/sergio/compasso/server/storage"
 )
+
+type deviceLiveStatus struct {
+	TodayQuotaSeconds     int64  `json:"today_quota_seconds"`
+	UsedSeconds           int64  `json:"used_seconds"`
+	RemainingSeconds      int64  `json:"remaining_seconds"`
+	Counting              bool   `json:"counting"`
+	Online                bool   `json:"online"`
+	NextBlock             string `json:"next_block"`
+	PolicyRevision        int64  `json:"policy_revision"`
+	AppliedPolicyRevision int64  `json:"applied_policy_revision"`
+}
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
@@ -260,7 +273,7 @@ func (a *App) handleDevicePost(w http.ResponseWriter, r *http.Request, current s
 }
 
 func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current session, deviceID string, status int, message, deviceToken string) {
-	device, storedPolicy, err := a.store.LoadDevice(r.Context(), deviceID)
+	device, storedPolicy, liveStatus, err := a.loadDeviceLiveStatus(r.Context(), deviceID)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -269,24 +282,56 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 		http.Error(w, "Falha ao carregar dispositivo.", http.StatusInternalServerError)
 		return
 	}
-	summary, err := a.store.LoadDailySummary(r.Context(), deviceID, a.now().Format("2006-01-02"))
-	if err != nil {
-		http.Error(w, "Falha ao carregar uso diário.", http.StatusInternalServerError)
-		return
-	}
 	events, err := a.store.ListAudit(r.Context(), deviceID, 30)
 	if err != nil {
 		http.Error(w, "Falha ao carregar histórico.", http.StatusInternalServerError)
 		return
 	}
-	todayQuota := storedPolicy.WeeklyQuota[a.now().Weekday()]
+	var editRoutine *storage.Routine
+	if editID := r.URL.Query().Get("edit_routine"); editID != "" {
+		for index := range storedPolicy.Routines {
+			if storedPolicy.Routines[index].ID == editID {
+				copy := storedPolicy.Routines[index]
+				editRoutine = &copy
+			}
+		}
+	}
+	a.render(w, "device", status, pageData{
+		Title: device.Name, Login: current.Login, CSRF: current.CSRF,
+		Device: device, Policy: storedPolicy, Events: events, EditRoutine: editRoutine,
+		TodayQuota: liveStatus.TodayQuotaSeconds, TodayUsed: liveStatus.UsedSeconds,
+		Remaining: liveStatus.RemainingSeconds, Counting: liveStatus.Counting,
+		NextBlock: liveStatus.NextBlock, PasswordSet: storedPolicy.LocalPasswordVerifier != "",
+		Online: liveStatus.Online, LastSeen: formatLastSeen(device.LastSeenAt),
+		DeviceToken:  deviceToken,
+		WeekdayNames: []string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"},
+		Error:        message, Success: r.URL.Query().Get("success"),
+	})
+}
+
+func (a *App) loadDeviceLiveStatus(ctx context.Context, deviceID string) (storage.Device, storage.Policy, deviceLiveStatus, error) {
+	device, storedPolicy, err := a.store.LoadDevice(ctx, deviceID)
+	if err != nil {
+		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
+	}
+	now := a.now()
+	summary, err := a.store.LoadDailySummary(ctx, deviceID, now.Format("2006-01-02"))
+	if err != nil {
+		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
+	}
+	todayQuota := storedPolicy.WeeklyQuota[now.Weekday()]
 	remaining := todayQuota + summary.BonusSeconds - summary.UsedSeconds
 	if remaining < 0 {
 		remaining = 0
 	}
-	nextBlock := "Aguardando sincronização"
+	online := isOnline(device.LastSeenAt, now, a.onlineTimeout)
+	liveStatus := deviceLiveStatus{
+		TodayQuotaSeconds: todayQuota, UsedSeconds: summary.UsedSeconds,
+		RemainingSeconds: remaining, Online: online, NextBlock: "Aguardando sincronização",
+		PolicyRevision: storedPolicy.Revision, AppliedPolicyRevision: device.AppliedPolicyRevision,
+	}
 	decisionInput := policy.Input{
-		Now: a.now(), Quota: secondsQuota(storedPolicy.WeeklyQuota),
+		Now: now, Quota: secondsQuota(storedPolicy.WeeklyQuota),
 		ManualBlock: storedPolicy.ManualBlock,
 		Consumed:    time.Duration(summary.UsedSeconds) * time.Second,
 		Bonus:       time.Duration(summary.BonusSeconds) * time.Second,
@@ -303,33 +348,44 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 			Start: time.Duration(routine.Start) * time.Second, End: time.Duration(routine.End) * time.Second,
 		})
 	}
-	online := isOnline(device.LastSeenAt, a.now(), a.onlineTimeout)
-	counting := false
 	if decision, evaluationErr := policy.Evaluate(decisionInput); evaluationErr == nil {
-		counting = decision.ShouldCount && online
+		liveStatus.Counting = decision.ShouldCount && online
 		if !decision.NextBlockAt.IsZero() {
-			nextBlock = decision.NextBlockAt.Format("02/01 15:04")
+			liveStatus.NextBlock = decision.NextBlockAt.Format("02/01 15:04")
 		}
 	}
-	var editRoutine *storage.Routine
-	if editID := r.URL.Query().Get("edit_routine"); editID != "" {
-		for index := range storedPolicy.Routines {
-			if storedPolicy.Routines[index].ID == editID {
-				copy := storedPolicy.Routines[index]
-				editRoutine = &copy
-			}
-		}
+	return device, storedPolicy, liveStatus, nil
+}
+
+func (a *App) adminDeviceStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Método não permitido.", http.StatusMethodNotAllowed)
+		return
 	}
-	a.render(w, "device", status, pageData{
-		Title: device.Name, Login: current.Login, CSRF: current.CSRF,
-		Device: device, Policy: storedPolicy, Events: events, EditRoutine: editRoutine,
-		TodayQuota: todayQuota, TodayUsed: summary.UsedSeconds,
-		Remaining: remaining, Counting: counting, NextBlock: nextBlock, PasswordSet: storedPolicy.LocalPasswordVerifier != "",
-		Online: online, LastSeen: formatLastSeen(device.LastSeenAt),
-		DeviceToken:  deviceToken,
-		WeekdayNames: []string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"},
-		Error:        message, Success: r.URL.Query().Get("success"),
-	})
+	if _, _, authenticated := a.authenticated(r); !authenticated {
+		http.Error(w, "Autenticação necessária.", http.StatusUnauthorized)
+		return
+	}
+	pathParts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/admin/devices/"), "/"), "/")
+	if len(pathParts) != 2 || pathParts[0] == "" || pathParts[1] != "status" {
+		http.NotFound(w, r)
+		return
+	}
+	_, _, liveStatus, err := a.loadDeviceLiveStatus(r.Context(), pathParts[0])
+	if errors.Is(err, storage.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Falha ao carregar status.", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(liveStatus); err != nil {
+		return
+	}
 }
 
 func isOnline(lastSeen *time.Time, now time.Time, timeout time.Duration) bool {

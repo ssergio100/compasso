@@ -34,14 +34,38 @@
     if (usedTime) usedTime.textContent = formatDuration(usedSeconds);
   };
 
+  let isCounting = remainingTime.dataset.counting === "true";
   renderCounters();
-  if (remainingTime.dataset.counting !== "true") return;
 
   window.setInterval(() => {
-    if (remainingSeconds > 0) {
+    if (isCounting && remainingSeconds > 0) {
       remainingSeconds -= 1;
       usedSeconds += 1;
     }
     renderCounters();
   }, 1000);
+
+  const synchronizeCounters = async () => {
+    try {
+      const response = await window.fetch(remainingTime.dataset.statusUrl, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return;
+
+      const currentStatus = await response.json();
+      const refreshedRemainingSeconds = Number.parseInt(currentStatus.remaining_seconds, 10);
+      const refreshedUsedSeconds = Number.parseInt(currentStatus.used_seconds, 10);
+      if (!Number.isFinite(refreshedRemainingSeconds) || !Number.isFinite(refreshedUsedSeconds)) return;
+
+      remainingSeconds = Math.max(0, refreshedRemainingSeconds);
+      usedSeconds = Math.max(0, refreshedUsedSeconds);
+      isCounting = currentStatus.counting === true;
+      renderCounters();
+    } catch (_error) {
+      // Keep the local counters running during a transient network failure.
+    }
+  };
+
+  window.setInterval(synchronizeCounters, 2000);
 })();

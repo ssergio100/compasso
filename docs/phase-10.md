@@ -39,6 +39,9 @@ de recuperação. Ele não modifica `/etc/pam.d/gdm-password`.
 - [x] Diálogo GTK validado no Zorin com D-Bus disponível, senha incorreta, rate limit e bônus correto de 15 minutos.
 - [x] Painel mantém a cota diária fixa e adiciona tempo extra somente ao tempo restante, sem campo separado de bônus (teste automatizado com cota 08:00 e restante 08:10 após adicionar 10 minutos).
 - [x] Contadores visuais mostram segundos: tempo restante decresce e tempo usado aumenta quando o cliente está online e a vigilância está contabilizando.
+- [x] Endpoint JSON administrativo fornece status vivo para a interface atual e para uma futura migração para React.
+- [x] Contadores consultam o servidor em segundo plano a cada dois segundos e incorporam tempo extra local sem recarregar a página.
+- [x] Tempo extra concedido no agente apareceu automaticamente no painel do Zorin, sem atualização manual da página.
 - [x] Mensagens administrativas de sucesso desaparecem automaticamente e não reaparecem ao atualizar a página.
 - [x] Alerta visual validado na sessão gráfica do Zorin antes do fim da cota.
 

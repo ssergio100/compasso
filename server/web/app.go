@@ -106,10 +106,15 @@ func NewWithAssets(store *storage.Store, secureCookies bool, sessionLifetime tim
 	}
 	mux := http.NewServeMux()
 	staticDirectory := filepath.Join(cleanAssetsDirectory, "static")
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDirectory))))
+	staticFiles := http.StripPrefix("/static/", http.FileServer(http.Dir(staticDirectory)))
+	mux.Handle("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		staticFiles.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("/login", app.login)
 	mux.HandleFunc("/logout", app.logout)
 	mux.HandleFunc("/api/v1/device/heartbeat", app.heartbeat)
+	mux.HandleFunc("/api/v1/admin/devices/", app.adminDeviceStatus)
 	mux.HandleFunc("/devices", app.devices)
 	mux.HandleFunc("/devices/", app.deviceRoutes)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

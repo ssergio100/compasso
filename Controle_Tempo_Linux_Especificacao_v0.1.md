@@ -813,7 +813,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Rotina -> alerta -> bloqueio -> fim da rotina -> login permitido com saldo preservado.
 
-- [ ] Pausa -> uso sem consumo -> retomar -> política aplicada imediatamente.
+- [x] Pausa -> uso sem consumo -> retomar -> política aplicada imediatamente (teste real no Zorin).
 
 - [ ] Reboot offline mantém restrições.
 
@@ -835,9 +835,9 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Tempo extra local e remoto aumenta saldo, mas nunca ignora rotinas.
 
-- [ ] Pausar vigilância libera o uso, ignora rotinas/cota e não desconta tempo.
+- [x] Pausar vigilância libera o uso, ignora rotinas/cota e não desconta tempo (teste real no Zorin).
 
-- [ ] Retomar vigilância aplica imediatamente a situação corrente.
+- [x] Retomar vigilância aplica imediatamente a situação corrente (teste real no Zorin).
 
 - [ ] Bloqueio manual remoto é efetivo dentro da latência de heartbeat esperada.
 
@@ -849,7 +849,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Eventos locais offline sincronizam sem duplicação.
 
-- [ ] O painel informa estado online/offline, saldo, próximo bloqueio e histórico essencial.
+- [x] O painel informa estado online/offline, saldo, próximo bloqueio e histórico essencial (testes reais das fases 7, 8 e 10).
 
 - [ ] Reboot, crash do agente e perda de Internet não devolvem controle indevido ao usuário.
 
