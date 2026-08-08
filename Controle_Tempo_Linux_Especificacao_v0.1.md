@@ -679,13 +679,13 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Rotina às 22:00 com antecedência 10 min gera alertas em 21:50, 21:55 e 21:59.
+- [x] Rotina às 22:00 com antecedência 10 min gera alertas em 21:50, 21:55 e 21:59 (teste automatizado).
 
-- [ ] Fim de saldo estimado dispara os mesmos marcos.
+- [x] Fim de saldo estimado dispara os mesmos marcos (teste automatizado).
 
-- [ ] Pausar vigilância cancela alertas futuros.
+- [x] Pausar vigilância cancela alertas futuros (teste automatizado).
 
-- [ ] Bloquear agora não espera alerta.
+- [x] Bloquear agora não espera alerta (teste automatizado).
 
 - [x] Implementar helper de cálculo de alertas e validar em testes automatizados.
 
@@ -701,15 +701,19 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Senha correta adiciona exatamente o tempo solicitado.
+- [x] Senha correta adiciona exatamente o tempo solicitado (teste automatizado).
 
-- [ ] Senha incorreta não adiciona tempo e aumenta contador de tentativas.
+- [x] Senha incorreta não adiciona tempo e aumenta contador de tentativas (teste automatizado).
 
-- [ ] Funciona sem Internet.
+- [x] Funciona sem Internet, usando somente política e SQLite locais (teste automatizado).
 
-- [ ] Após reinício, bônus continua aplicado.
+- [x] Após reinício, bônus continua aplicado (teste automatizado com reabertura do SQLite).
 
-- [ ] Bônus não libera uma rotina ativa.
+- [x] Bônus não libera uma rotina ativa (teste automatizado).
+
+- [x] No Zorin, o diálogo GTK abre, oculta a senha e sinaliza corretamente que o agente está indisponível.
+
+- [ ] No Zorin, o diálogo GTK adiciona bônus pelo D-Bus e apresenta sucesso, senha incorreta e rate limit.
 
 ## Fase 7 — Servidor, autenticação e painel web
 
@@ -725,17 +729,19 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Login correto/incorreto.
+- [x] Login correto/incorreto (teste HTTP automatizado).
 
-- [ ] Alterar cota de terça sem afetar segunda.
+- [x] Alterar cota de terça sem afetar segunda (teste automatizado de persistência e HTTP).
 
-- [ ] Criar rotina apenas seg–sex.
+- [x] Criar rotina apenas seg–sex (teste automatizado).
 
-- [ ] Rotina 22:00–08:00 preservada corretamente.
+- [x] Rotina 22:00–08:00 preservada corretamente (teste automatizado).
 
-- [ ] Troca de senha não revela senha antiga.
+- [x] Troca de senha não revela senha ou verificador na interface/histórico (teste automatizado).
 
-- [ ] Ações administrativas aparecem no histórico.
+- [x] Ações administrativas aparecem no histórico (teste automatizado).
+
+- [x] No navegador, o fluxo visual de login, dispositivo, cotas, rotina, senha e histórico é aprovado.
 
 ## Fase 8 — Heartbeat e sincronização
 

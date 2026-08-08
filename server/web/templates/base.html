@@ -1,0 +1,30 @@
+{{define "base"}}
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — Compasso</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  {{if .Login}}
+  <header class="topbar">
+    <a class="brand" href="/devices">Compasso</a>
+    <div class="top-actions">
+      <span>{{.Login}}</span>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button class="link-button" type="submit">Sair</button>
+      </form>
+    </div>
+  </header>
+  {{end}}
+  <main class="container">
+    {{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}
+    {{if .Success}}<div class="notice success" role="status">{{.Success}}</div>{{end}}
+    {{template "content" .}}
+  </main>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,135 @@
+{{define "content"}}
+<nav class="breadcrumbs"><a href="/devices">Dispositivos</a> / {{.Device.Name}}</nav>
+
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">AGORA</p>
+    <h1>{{.Device.Name}}</h1>
+  </div>
+  <span class="status offline">AGUARDANDO CONEXÃO</span>
+</div>
+
+<section class="summary-grid">
+  <div class="card metric featured">
+    <span>Tempo restante</span>
+    <strong>{{duration .Remaining}}</strong>
+  </div>
+  <div class="card metric">
+    <span>Usado hoje</span>
+    <strong>{{duration .TodayUsed}}</strong>
+  </div>
+  <div class="card metric">
+    <span>Bônus hoje</span>
+    <strong>{{duration .TodayBonus}}</strong>
+  </div>
+  <div class="card metric">
+    <span>Próximo bloqueio</span>
+    <strong class="small-metric">{{.NextBlock}}</strong>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-heading">
+    <div><p class="eyebrow">CONFIGURAÇÃO SEMANAL</p><h2>Cotas</h2></div>
+    <span class="revision">Revisão {{.Policy.Revision}}</span>
+  </div>
+  <form method="post" action="/devices/{{.Device.ID}}/quotas" class="stack">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <div class="quota-grid">
+      {{range $day, $name := .WeekdayNames}}
+      <label>{{$name}}
+        <input name="quota_{{$day}}" value="{{duration (index $.Policy.WeeklyQuota $day)}}" pattern="[0-9]{1,2}:[0-5][0-9]" required>
+      </label>
+      {{end}}
+    </div>
+    <label class="short-field">Aviso principal (minutos)
+      <input type="number" name="warning_minutes" min="0" max="120" value="{{.Policy.WarningMinutes}}" required>
+    </label>
+    <button class="primary" type="submit">Salvar cotas</button>
+  </form>
+</section>
+
+<section class="card">
+  <div class="section-heading"><div><p class="eyebrow">BLOQUEIOS RECORRENTES</p><h2>Rotinas</h2></div></div>
+  <div class="routine-list">
+    {{range .Policy.Routines}}
+    <article class="routine-row">
+      <div><strong>{{.Name}}</strong><span>{{dayNames .Days}} · {{clock .Start}}–{{clock .End}}</span></div>
+      <div class="row-actions">
+        <a class="secondary button" href="/devices/{{$.Device.ID}}?edit_routine={{.ID}}#routine-form">Editar</a>
+        <details class="inline-confirm">
+          <summary>Excluir</summary>
+          <form method="post" action="/devices/{{$.Device.ID}}/routines/{{.ID}}">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <button class="danger-text" type="submit">Confirmar</button>
+          </form>
+        </details>
+      </div>
+    </article>
+    {{else}}<p class="muted">Nenhuma rotina cadastrada.</p>{{end}}
+  </div>
+
+  <form id="routine-form" method="post" action="/devices/{{.Device.ID}}/routines" class="stack divided">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <input type="hidden" name="routine_id" value="{{if .EditRoutine}}{{.EditRoutine.ID}}{{end}}">
+    <h3>{{if .EditRoutine}}Editar rotina{{else}}Nova rotina{{end}}</h3>
+    <label>Nome
+      <input name="name" maxlength="80" value="{{if .EditRoutine}}{{.EditRoutine.Name}}{{end}}" placeholder="Ex.: Hora de dormir" required>
+    </label>
+    <fieldset>
+      <legend>Dias</legend>
+      <div class="day-picker">
+        {{range $day, $name := .WeekdayNames}}
+        <label><input type="checkbox" name="day_{{$day}}" {{if $.EditRoutine}}{{if daySelected $.EditRoutine.Days $day}}checked{{end}}{{end}}> {{$name}}</label>
+        {{end}}
+      </div>
+    </fieldset>
+    <div class="two-columns">
+      <label>Início<input type="time" name="start" value="{{if .EditRoutine}}{{clock .EditRoutine.Start}}{{else}}22:00{{end}}" required></label>
+      <label>Fim<input type="time" name="end" value="{{if .EditRoutine}}{{clock .EditRoutine.End}}{{else}}08:00{{end}}" required></label>
+    </div>
+    <button class="primary" type="submit">{{if .EditRoutine}}Atualizar rotina{{else}}Adicionar rotina{{end}}</button>
+  </form>
+</section>
+
+<section class="card">
+  <p class="eyebrow">SEGURANÇA LOCAL</p>
+  <h2>Senha do responsável</h2>
+  <p class="muted">A senha atual nunca é exibida. Status: {{if .PasswordSet}}configurada{{else}}não configurada{{end}}.</p>
+  <form method="post" action="/devices/{{.Device.ID}}/password" class="stack">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <div class="two-columns">
+      <label>Nova senha<input type="password" name="password" autocomplete="new-password" required></label>
+      <label>Confirmar senha<input type="password" name="password_confirmation" autocomplete="new-password" required></label>
+    </div>
+    <button class="primary" type="submit">Alterar senha local</button>
+  </form>
+</section>
+
+<section class="card">
+  <p class="eyebrow">AUDITORIA</p>
+  <h2>Histórico</h2>
+  <div class="history">
+    {{range .Events}}
+    <article><time>{{.CreatedAt.Format "02/01/2006 15:04"}}</time><div><strong>{{eventName .Kind}}</strong><span>{{.Origin}} · {{.Details}}</span></div></article>
+    {{else}}<p class="muted">Nenhum evento registrado.</p>{{end}}
+  </div>
+</section>
+
+<section class="card danger-zone">
+  <h2>Dispositivo</h2>
+  <form method="post" action="/devices/{{.Device.ID}}/rename" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label>Nome<input name="name" maxlength="80" value="{{.Device.Name}}" required></label>
+    <button class="secondary" type="submit">Renomear</button>
+  </form>
+  <details>
+    <summary>Excluir dispositivo</summary>
+    <p>Esta ação remove configurações e histórico deste dispositivo.</p>
+    <form method="post" action="/devices/{{.Device.ID}}/delete">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button class="danger" type="submit">Confirmar exclusão</button>
+    </form>
+  </details>
+</section>
+{{end}}

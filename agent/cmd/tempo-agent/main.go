@@ -13,6 +13,8 @@ import (
 
 	"github.com/sergio/compasso/agent/config"
 	"github.com/sergio/compasso/agent/daemon"
+	"github.com/sergio/compasso/agent/localapi"
+	"github.com/sergio/compasso/agent/localauth"
 	"github.com/sergio/compasso/agent/session"
 	"github.com/sergio/compasso/agent/storage"
 )
@@ -58,6 +60,17 @@ func run(configPath string, logger *log.Logger) error {
 	agent, err := daemon.New(store, logind, settings.ControlledUser, settings.CheckpointInterval)
 	if err != nil {
 		return err
+	}
+	localBonus, err := localauth.NewService(store)
+	if err != nil {
+		return err
+	}
+	localServer, err := localapi.ExportSystem(localBonus)
+	if err != nil {
+		logger.Printf("local D-Bus API unavailable: %v", err)
+	} else {
+		defer localServer.Close()
+		logger.Printf("local D-Bus API ready name=%s", localapi.BusName)
 	}
 	logger.Printf("starting controlled_user=%s database=%s", settings.ControlledUser, settings.DatabasePath)
 	return agent.Run(ctx, settings.TickInterval, logger)

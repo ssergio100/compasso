@@ -1,8 +1,8 @@
-.PHONY: all build build-agent fmt fmt-check lint test test-go test-migrations clean
+.PHONY: all build build-agent build-server fmt fmt-check lint test test-go test-ui test-migrations clean
 
 all: test
 
-build: build-agent
+build: build-agent build-server
 	go build ./...
 
 build-agent:
@@ -10,6 +10,10 @@ build-agent:
 	go build -o bin/tempo-agent ./agent/cmd/tempo-agent
 	go build -o bin/tempo-pam-check ./agent/cmd/tempo-pam-check
 	go build -o bin/tempo-pam-setup ./agent/cmd/tempo-pam-setup
+
+build-server:
+	mkdir -p bin
+	go build -o bin/tempo-server ./server/cmd/tempo-server
 
 fmt:
 	gofmt -w $$(find agent server -type f -name '*.go' 2>/dev/null)
@@ -28,10 +32,13 @@ lint: fmt-check
 test-go:
 	go test ./...
 
+test-ui:
+	cd local-ui && python3 -m unittest discover -v
+
 test-migrations:
 	./scripts/test-migrations.sh
 
-test: lint test-go test-migrations build
+test: lint test-go test-ui test-migrations build
 
 clean:
 	rm -rf ./bin ./dist
