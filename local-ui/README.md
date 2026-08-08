@@ -25,3 +25,18 @@ Exemplo de evento:
   "sound_enabled": true
 }
 ```
+
+## Fase 6 — Bônus local
+
+`bonus_dialog.py` é a interface GTK 4 para adicionar 15, 30, 60 ou 120 minutos.
+A senha é enviada pelo system D-Bus ao `tempo-agent`; somente o agente root
+verifica Argon2id e grava o bônus/evento no SQLite.
+
+Para conferir apenas a interface durante o desenvolvimento:
+
+```bash
+python3 bonus_dialog.py
+```
+
+Sem o agente instalado no system D-Bus, a janela informa que o serviço não está
+disponível. O teste integrado no Zorin está descrito em `docs/phase-6.md`.
