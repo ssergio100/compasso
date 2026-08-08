@@ -40,3 +40,24 @@ func TestLoadRequiresControlledUser(t *testing.T) {
 		t.Fatal("expected missing controlled_user to fail")
 	}
 }
+
+func TestValidateRequiresHTTPSForRemoteSynchronization(t *testing.T) {
+	configuration := Config{
+		DatabasePath: "/var/lib/tempo-agent/agent.db", ControlledUser: "child",
+		TickInterval: time.Second, CheckpointInterval: 5 * time.Second,
+		LoginctlPath: "/usr/bin/loginctl", HeartbeatInterval: 10 * time.Second,
+		HTTPTimeout: 8 * time.Second, DeviceID: "device", DeviceToken: "secret",
+		ServerURL: "http://apicompasso.smresume.com",
+	}
+	if err := configuration.Validate(); err == nil {
+		t.Fatal("remote plain HTTP was accepted")
+	}
+	configuration.ServerURL = "https://apicompasso.smresume.com"
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("remote HTTPS rejected: %v", err)
+	}
+	configuration.ServerURL = "http://127.0.0.1:8081"
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("loopback development HTTP rejected: %v", err)
+	}
+}

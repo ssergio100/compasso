@@ -1,0 +1,9 @@
+tunnel: <TUNNEL-UUID>
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  - hostname: apicompasso.smresume.com
+    service: http://127.0.0.1:8080
+  - hostname: admcompasso.smresume.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404

@@ -47,6 +47,9 @@ func TestLoginCorrectIncorrectAndSecureCookie(t *testing.T) {
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("unsafe session cookie: %+v", cookie)
 	}
+	if correct.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("production HTTPS response is missing HSTS")
+	}
 }
 
 func TestAdministrativeWorkflowAndCSRF(t *testing.T) {
@@ -154,7 +157,13 @@ func TestHeartbeatRequiresDeviceCredential(t *testing.T) {
 	}
 }
 
-func newWebFixture(t *testing.T, secure bool, lifetime time.Duration) *webFixture {
+type testContext interface {
+	Helper()
+	TempDir() string
+	Fatal(...interface{})
+}
+
+func newWebFixture(t testContext, secure bool, lifetime time.Duration) *webFixture {
 	t.Helper()
 	ctx := context.Background()
 	store, err := serverstorage.Open(ctx, filepath.Join(t.TempDir(), "server.db"))

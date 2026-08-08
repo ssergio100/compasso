@@ -97,10 +97,19 @@
   </dl>
   {{else}}
   <p class="muted">Gerar uma nova credencial invalida imediatamente qualquer token anterior.</p>
-  <form method="post" action="/devices/{{.Device.ID}}/token">
-    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-    <button class="secondary" type="submit">Gerar novo token</button>
-  </form>
+  <div class="row-actions">
+    <form method="post" action="/devices/{{.Device.ID}}/token">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button class="secondary" type="submit">Gerar novo token</button>
+    </form>
+    <details class="inline-confirm">
+      <summary>Revogar token atual</summary>
+      <form method="post" action="/devices/{{.Device.ID}}/revoke-token">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button class="danger-text" type="submit">Confirmar revogação</button>
+      </form>
+    </details>
+  </div>
   {{end}}
 </section>
 

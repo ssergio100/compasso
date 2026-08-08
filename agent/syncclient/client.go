@@ -95,7 +95,7 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("send heartbeat: %w", err)
+		return protocol.HeartbeatResponse{}, fmt.Errorf("send heartbeat: %s", redactSensitiveText(err.Error(), c.config.DeviceToken))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -103,12 +103,10 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		c.recordRetries(ctx, pending)
 		return protocol.HeartbeatResponse{}, fmt.Errorf("heartbeat returned HTTP %d", response.StatusCode)
 	}
-	var result protocol.HeartbeatResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 512<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	result, err := decodeHeartbeatResponse(response.Body)
+	if err != nil {
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+		return protocol.HeartbeatResponse{}, err
 	}
 	for _, eventID := range result.AcknowledgedEvents {
 		if err := c.store.AcknowledgeEvent(ctx, eventID); err != nil {
@@ -126,6 +124,26 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		}
 	}
 	return result, nil
+}
+
+func decodeHeartbeatResponse(responseBody io.Reader) (protocol.HeartbeatResponse, error) {
+	var heartbeatResponse protocol.HeartbeatResponse
+	decoder := json.NewDecoder(io.LimitReader(responseBody, 512<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&heartbeatResponse); err != nil {
+		return protocol.HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return protocol.HeartbeatResponse{}, errors.New("decode heartbeat response: trailing JSON data")
+	}
+	return heartbeatResponse, nil
+}
+
+func redactSensitiveText(message, secret string) string {
+	if secret == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, secret, "[REDACTED]")
 }
 
 func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now time.Time) error {

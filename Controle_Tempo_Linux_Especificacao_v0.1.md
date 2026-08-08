@@ -787,11 +787,11 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Usuário comum não consegue parar serviço.
 
-- [ ] Token revogado deixa de autenticar.
+- [x] Token revogado deixa de autenticar (teste automatizado de persistência e autenticação).
 
-- [ ] Logs não contêm senha/token.
+- [x] Logs não contêm senha/token (testes automatizados de sanitização e auditoria).
 
-- [ ] Fuzz/testes de payload inválido não derrubam servidor ou agente.
+- [x] Fuzz/testes de payload inválido não derrubam servidor ou agente (2.016.257 execuções de fuzz no Zorin, além do corpus automatizado).
 
 ## Fase 10 — Teste ponta a ponta e piloto
 

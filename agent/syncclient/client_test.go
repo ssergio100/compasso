@@ -3,9 +3,12 @@ package syncclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,10 +137,41 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 }
 
+func TestTransportErrorsRedactDeviceToken(t *testing.T) {
+	ctx := context.Background()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	deviceToken := "secret-device-token-that-must-not-appear"
+	httpClient := &http.Client{Transport: failingTransport{failure: fmt.Errorf("failed Authorization: Bearer %s", deviceToken)}}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: deviceToken,
+		HeartbeatInterval: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, heartbeatError := client.Heartbeat(ctx, time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local))
+	if heartbeatError == nil || strings.Contains(heartbeatError.Error(), deviceToken) || !strings.Contains(heartbeatError.Error(), "[REDACTED]") {
+		t.Fatalf("transport error was not sanitized: %v", heartbeatError)
+	}
+}
+
 type handlerTransport struct{ handler http.Handler }
 
 func (transport handlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	recorder := httptest.NewRecorder()
 	transport.handler.ServeHTTP(recorder, request)
 	return recorder.Result(), nil
+}
+
+type failingTransport struct{ failure error }
+
+func (transport failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if transport.failure == nil {
+		return nil, errors.New("transport failed")
+	}
+	return nil, transport.failure
 }

@@ -1,0 +1,14 @@
+.git
+.github
+.codex
+.agents
+bin
+dist
+var
+**/config.toml
+**/__pycache__
+**/*.pyc
+secrets
+*.db
+*.db-shm
+*.db-wal

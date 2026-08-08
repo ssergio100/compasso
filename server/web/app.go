@@ -71,7 +71,8 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 				"quotas_updated": "Cotas atualizadas", "routine_saved": "Rotina salva",
 				"routine_deleted": "Rotina excluída", "local_password_changed": "Senha local alterada",
 				"device_token_issued": "Credencial do agente gerada", "bonus_added": "Tempo extra adicionado",
-				"pause_monitoring": "Vigilância pausada", "resume_monitoring": "Vigilância retomada",
+				"device_token_revoked": "Credencial do agente revogada",
+				"pause_monitoring":     "Vigilância pausada", "resume_monitoring": "Vigilância retomada",
 				"block_now": "Bloqueio imediato", "clear_manual_block": "Bloqueio removido",
 			}
 			if label := labels[kind]; label != "" {
@@ -114,7 +115,7 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 		}
 		http.Redirect(w, r, "/devices", http.StatusSeeOther)
 	})
-	app.handler = securityHeaders(mux)
+	app.handler = securityHeaders(mux, secureCookies)
 	return app, nil
 }
 
@@ -160,12 +161,15 @@ func constantEqual(left, right string) bool {
 	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(next http.Handler, productionHTTPS bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'")
+		if productionHTTPS {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

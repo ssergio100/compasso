@@ -227,6 +227,9 @@ func (a *App) handleDevicePost(w http.ResponseWriter, r *http.Request, current s
 			a.renderDevice(w, r, current, deviceID, http.StatusOK, "", token)
 			return
 		}
+	case len(action) == 1 && action[0] == "revoke-token":
+		err = a.store.RevokeDeviceToken(r.Context(), deviceID, a.now())
+		success = "Token revogado. O agente não poderá sincronizar até receber uma nova credencial."
 	case len(action) == 1 && action[0] == "control":
 		kind := r.FormValue("command")
 		err = a.store.QueueControl(r.Context(), deviceID, kind, a.now())

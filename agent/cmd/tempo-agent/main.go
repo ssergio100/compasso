@@ -23,9 +23,18 @@ import (
 
 func main() {
 	configPath := flag.String("config", "/etc/tempo-agent/config.toml", "path to the agent configuration")
+	validateConfigurationOnly := flag.Bool("check-config", false, "validate configuration and exit")
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "tempo-agent: ", log.LstdFlags|log.LUTC)
+	if *validateConfigurationOnly {
+		if _, err := config.Load(*configPath); err != nil {
+			logger.Printf("configuration invalid: %v", err)
+			os.Exit(1)
+		}
+		logger.Printf("configuration valid")
+		return
+	}
 	if err := run(*configPath, logger); err != nil {
 		logger.Printf("fatal: %v", err)
 		os.Exit(1)
@@ -33,6 +42,9 @@ func main() {
 }
 
 func run(configPath string, logger *log.Logger) error {
+	// Protect databases, WAL files and any future state created by the daemon,
+	// including when it is started manually instead of through systemd.
+	syscall.Umask(0o077)
 	settings, err := config.Load(configPath)
 	if err != nil {
 		return err

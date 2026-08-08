@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-server fmt fmt-check lint test test-go test-ui test-migrations clean
+.PHONY: all build build-agent build-server fmt fmt-check lint test test-go test-ui test-migrations test-security clean
 
 all: test
 
@@ -16,10 +16,10 @@ build-server:
 	go build -o bin/tempo-server ./server/cmd/tempo-server
 
 fmt:
-	gofmt -w $$(find agent server -type f -name '*.go' 2>/dev/null)
+	gofmt -w $$(find agent server protocol -type f -name '*.go' 2>/dev/null)
 
 fmt-check:
-	@unformatted="$$(gofmt -l $$(find agent server -type f -name '*.go' 2>/dev/null))"; \
+	@unformatted="$$(gofmt -l $$(find agent server protocol -type f -name '*.go' 2>/dev/null))"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "Arquivos Go sem formatação:"; \
 		echo "$$unformatted"; \
@@ -38,7 +38,10 @@ test-ui:
 test-migrations:
 	./scripts/test-migrations.sh
 
-test: lint test-go test-ui test-migrations build
+test-security:
+	./scripts/test-security-packaging.sh
+
+test: lint test-go test-ui test-migrations test-security build
 
 clean:
 	rm -rf ./bin ./dist

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -53,8 +54,33 @@ func (s *Store) IssueDeviceToken(ctx context.Context, deviceID string, now time.
 	return token, nil
 }
 
+// RevokeDeviceToken immediately rejects the current device credential without
+// creating a replacement secret.
+func (s *Store) RevokeDeviceToken(ctx context.Context, deviceID string, now time.Time) error {
+	if deviceID == "" || now.IsZero() {
+		return errors.New("device id and revocation time are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE device SET device_token_hash='', updated_at=? WHERE id=?`, formatTime(now), deviceID)
+	if err != nil {
+		return fmt.Errorf("revoke device token: %w", err)
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	if err := insertAudit(ctx, tx, deviceID, "device_token_revoked", map[string]string{"status": "revoked"}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) error {
-	if deviceID == "" || token == "" {
+	if !validOpaqueIdentifier(deviceID) || len(token) != 43 {
 		return ErrInvalidDeviceCredentials
 	}
 	var stored string
@@ -74,7 +100,8 @@ func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) 
 }
 
 func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request protocol.HeartbeatRequest, now time.Time) (protocol.HeartbeatResponse, error) {
-	if request.PolicyRevision < 0 || request.SecondsUsed < 0 || now.IsZero() {
+	const maximumDailyUsageSeconds = int64((48 * time.Hour) / time.Second)
+	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.SecondsUsed < 0 || request.SecondsUsed > maximumDailyUsageSeconds || now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("invalid heartbeat counters")
 	}
 	parsedDate, err := time.Parse("2006-01-02", request.LocalDate)
@@ -121,8 +148,8 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		acknowledged = append(acknowledged, event.UUID)
 	}
 	for _, commandID := range request.CommandAcks {
-		if commandID == "" {
-			return protocol.HeartbeatResponse{}, errors.New("empty command acknowledgement")
+		if !validOpaqueIdentifier(commandID) {
+			return protocol.HeartbeatResponse{}, errors.New("invalid command acknowledgement")
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE device_command SET acknowledged_at=COALESCE(acknowledged_at, ?)
@@ -151,11 +178,13 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 }
 
 func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protocol.PendingEvent) error {
-	if event.UUID == "" || event.Kind != "bonus_added" || event.CreatedAt.IsZero() || len(event.Payload) == 0 || len(event.Payload) > 16<<10 || !json.Valid(event.Payload) {
+	if !validOpaqueIdentifier(event.UUID) || event.Kind != "bonus_added" || event.CreatedAt.IsZero() || len(event.Payload) == 0 || len(event.Payload) > 16<<10 || !json.Valid(event.Payload) {
 		return errors.New("invalid pending event")
 	}
 	var bonus protocol.BonusPayload
-	if err := json.Unmarshal(event.Payload, &bonus); err != nil || bonus.LocalDate == "" || bonus.Seconds <= 0 || bonus.Origin != "local" {
+	decoder := json.NewDecoder(bytes.NewReader(event.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&bonus); err != nil || bonus.LocalDate == "" || bonus.Seconds <= 0 || bonus.Seconds > int64((12*time.Hour)/time.Second) || bonus.Origin != "local" {
 		return errors.New("invalid local bonus event")
 	}
 	parsed, err := time.Parse("2006-01-02", bonus.LocalDate)
@@ -167,12 +196,33 @@ func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protoc
 		VALUES (?, ?, ?, ?, 'local', ?)`, event.UUID, deviceID, bonus.LocalDate, bonus.Seconds, formatTime(event.CreatedAt)); err != nil {
 		return fmt.Errorf("store local bonus event: %w", err)
 	}
+	sanitizedPayload, err := json.Marshal(struct {
+		LocalDate string `json:"local_date"`
+		Seconds   int64  `json:"seconds"`
+		Origin    string `json:"origin"`
+	}{LocalDate: bonus.LocalDate, Seconds: bonus.Seconds, Origin: "local"})
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO audit_event(uuid, device_id, kind, origin, payload_json, created_at)
-		VALUES (?, ?, 'bonus_added', 'local', ?, ?)`, event.UUID, deviceID, string(event.Payload), formatTime(event.CreatedAt)); err != nil {
+		VALUES (?, ?, 'bonus_added', 'local', ?, ?)`, event.UUID, deviceID, string(sanitizedPayload), formatTime(event.CreatedAt)); err != nil {
 		return fmt.Errorf("audit local bonus event: %w", err)
 	}
 	return nil
+}
+
+func validOpaqueIdentifier(identifier string) bool {
+	if len(identifier) == 0 || len(identifier) > 128 {
+		return false
+	}
+	for _, character := range identifier {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) pendingCommands(ctx context.Context, deviceID string, limit int) ([]protocol.Command, error) {

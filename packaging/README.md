@@ -14,3 +14,8 @@ Os pacotes finais serão adicionados na fase correspondente.
 Na fase 6, `dbus/br.com.tempo.Agent.conf` autoriza chamadas locais ao método de
 bônus e `applications/br.com.tempo.LocalBonus.desktop` adiciona o diálogo GTK ao
 menu do Zorin.
+
+Na fase 9, `scripts/install-agent-securely.sh` instala apenas o agente com
+configuração e estado pertencentes a root, valida o token no journal e habilita
+a unidade endurecida. Ele não altera PAM. O exemplo `cloudflared` publica os
+subdomínios HTTPS mantendo a origem HTTP restrita ao loopback do servidor.
