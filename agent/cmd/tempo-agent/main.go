@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/sergio/compasso/agent/alert"
 	"github.com/sergio/compasso/agent/config"
 	"github.com/sergio/compasso/agent/daemon"
 	"github.com/sergio/compasso/agent/localapi"
@@ -71,10 +72,15 @@ func run(configPath string, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	agent, err := daemon.New(store, logind, settings.ControlledUser, settings.CheckpointInterval)
+	policyDaemon, err := daemon.New(store, logind, settings.ControlledUser, settings.CheckpointInterval)
 	if err != nil {
 		return err
 	}
+	desktopNotifier, err := alert.NewDesktopNotifier(settings.ControlledUser)
+	if err != nil {
+		return err
+	}
+	policyDaemon.SetAlertNotifier(desktopNotifier)
 	localBonus, err := localauth.NewService(store)
 	if err != nil {
 		return err
@@ -104,5 +110,5 @@ func run(configPath string, logger *log.Logger) error {
 	} else {
 		logger.Printf("synchronization disabled; local policy remains available offline")
 	}
-	return agent.Run(ctx, settings.TickInterval, logger)
+	return policyDaemon.Run(ctx, settings.TickInterval, logger)
 }

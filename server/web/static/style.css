@@ -33,7 +33,7 @@ h2 { margin-bottom:14px; }
 .status.offline { background:#f2f4f7; color:#667085; }
 .status.online { background:#dff7ed; color:#086c52; }
 .connection-state { display:flex; flex-direction:column; align-items:flex-end; gap:6px; color:var(--muted); }
-.summary-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+.summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; }
 .metric { display:flex; flex-direction:column; gap:8px; }
 .metric span { color:var(--muted); font-size:.85rem; }
 .metric strong { font-size:1.8rem; }

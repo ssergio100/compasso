@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sergio/compasso/agent/localauth"
 	"github.com/sergio/compasso/agent/policy"
 	agentstorage "github.com/sergio/compasso/agent/storage"
 	serverstorage "github.com/sergio/compasso/server/storage"
@@ -43,7 +44,7 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	application, err := web.New(serverStore, false, time.Hour)
+	application, err := web.NewWithAssets(serverStore, false, time.Hour, "../../server/web")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +157,94 @@ func TestTransportErrorsRedactDeviceToken(t *testing.T) {
 	_, heartbeatError := client.Heartbeat(ctx, time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local))
 	if heartbeatError == nil || strings.Contains(heartbeatError.Error(), deviceToken) || !strings.Contains(heartbeatError.Error(), "[REDACTED]") {
 		t.Fatalf("transport error was not sanitized: %v", heartbeatError)
+	}
+}
+
+func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	serverStore, err := serverstorage.Open(ctx, filepath.Join(t.TempDir(), "server.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverStore.Close()
+	device, err := serverStore.CreateDevice(ctx, "Password sync", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceToken, err := serverStore.IssueDeviceToken(ctx, device.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordParameters := localauth.Argon2Params{Memory: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 8, KeyLength: 16}
+	oldVerifier, err := localauth.HashPassword("old-password", passwordParameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newVerifier, err := localauth.HashPassword("new-password", passwordParameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverStore.SetLocalPassword(ctx, device.ID, oldVerifier, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	application, err := web.NewWithAssets(serverStore, false, time.Hour, "../../server/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serverOnline uint32 = 1
+	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadUint32(&serverOnline) == 0 {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		application.ServeHTTP(w, r)
+	})}}
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	synchronizationClient, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: device.ID,
+		DeviceToken: deviceToken, HeartbeatInterval: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := serverStore.SetLocalPassword(ctx, device.ID, newVerifier, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	atomic.StoreUint32(&serverOnline, 0)
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(4*time.Second)); err == nil {
+		t.Fatal("offline password synchronization unexpectedly succeeded")
+	}
+	offlinePolicy, err := agentStore.LoadPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPasswordValid, _ := localauth.VerifyPassword("old-password", offlinePolicy.LocalPasswordVerifier)
+	newPasswordValidOffline, _ := localauth.VerifyPassword("new-password", offlinePolicy.LocalPasswordVerifier)
+	if !oldPasswordValid || newPasswordValidOffline {
+		t.Fatal("offline client did not preserve the old password verifier")
+	}
+
+	atomic.StoreUint32(&serverOnline, 1)
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	onlinePolicy, err := agentStore.LoadPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPasswordValid, _ = localauth.VerifyPassword("old-password", onlinePolicy.LocalPasswordVerifier)
+	newPasswordValid, _ := localauth.VerifyPassword("new-password", onlinePolicy.LocalPasswordVerifier)
+	if oldPasswordValid || !newPasswordValid {
+		t.Fatal("successful synchronization did not replace the password verifier")
 	}
 }
 

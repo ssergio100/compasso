@@ -100,6 +100,29 @@ func TestDelayedCycleDoesNotCountPastQuotaExpiry(t *testing.T) {
 	}
 }
 
+func TestQuotaCycleEmitsOneMinuteDesktopAlert(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	snapshot := testPolicy(1, start.Weekday(), 2*time.Minute)
+	snapshot.WarningMinutes = 1
+	if err := store.ReplacePolicy(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	policyDaemon, err := New(store, graphicalFake(), "child", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyDaemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	status, err := policyDaemon.Step(ctx, start.Add(time.Minute))
+	if err != nil || len(status.DueAlerts) != 1 || status.DueAlerts[0].Kind != "one_minute" {
+		t.Fatalf("status due alerts=%+v err=%v", status.DueAlerts, err)
+	}
+}
+
 func TestRoutineStartTerminatesSession(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)

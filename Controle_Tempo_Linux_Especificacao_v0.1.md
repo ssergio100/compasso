@@ -70,7 +70,7 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 | Agente              | Serviço privilegiado executado no cliente Linux. É a autoridade local para avaliar regras, contabilizar tempo, persistir estado e aplicar bloqueios. |
 | Servidor            | Aplicação central que hospeda a interface web, API, usuários administrativos, configuração e histórico.                                              |
 | Cota diária         | Quantidade-base de tempo permitida para um dia da semana.                                                                                            |
-| Tempo extra / bônus | Acréscimo pontual ao saldo do dia corrente. Não altera a cota permanente do dia da semana e não ignora rotinas.                                      |
+| Tempo extra / bônus | Acréscimo pontual ao tempo restante do dia corrente. Não altera a cota diária configurada e não ignora rotinas.                                        |
 | Rotina              | Janela recorrente de bloqueio, associada a nome, dias da semana, horário inicial e horário final.                                                    |
 | Vigilância ativa    | Estado normal: regras são aplicadas e o tempo permitido é contabilizado.                                                                             |
 | Vigilância pausada  | Override administrativo: computador liberado, rotinas ignoradas e tempo diário não contabilizado.                                                    |
@@ -84,7 +84,7 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Cada dia da semana terá uma cota configurável individualmente, incluindo valor zero.
 
-- A cota é uma configuração permanente semanal; o saldo do dia é calculado a partir da cota, bônus e consumo.
+- A cota é uma configuração permanente semanal; o tempo restante base é a cota do dia menos o tempo utilizado.
 
 - Ao atingir saldo zero, a sessão controlada deve ser encerrada e novos logins devem ser recusados enquanto o bloqueio permanecer válido.
 
@@ -94,9 +94,9 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Pode ser concedido remotamente pela interface web ou localmente mediante senha do responsável.
 
-- É pontual e associado ao dia corrente; não modifica a cota semanal configurada.
+- É pontual e associado ao dia corrente; aumenta o tempo restante sem modificar a cota semanal configurada.
 
-- É somado ao saldo de uso, mas não tem precedência sobre rotinas.
+- Depois de concedido, é consumido junto com o restante do dia, mas não tem precedência sobre rotinas.
 
 - Se uma rotina começar, o computador bloqueia mesmo que ainda existam minutos de bônus; o saldo volta a estar disponível ao final da rotina.
 
@@ -175,7 +175,9 @@ O motor de política deve ser determinístico. Para uma mesma entrada de estado,
    SIM -> BLOQUEADO.
    NÃO -> continuar.
 
-4. Saldo diário = cota + bônus - consumo está esgotado?
+4. Calcular tempo restante base = cota diária - tempo utilizado.
+   Somar ao tempo restante os acréscimos de tempo extra concedidos no dia.
+   O tempo restante está esgotado?
    SIM -> BLOQUEADO.
    NÃO -> LIBERADO e contabiliza tempo.
 ```
@@ -713,7 +715,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [x] No Zorin, o diálogo GTK abre, oculta a senha e sinaliza corretamente que o agente está indisponível.
 
-- [ ] No Zorin, o diálogo GTK adiciona bônus pelo D-Bus e apresenta sucesso, senha incorreta e rate limit.
+- [x] No Zorin, o diálogo GTK adiciona bônus pelo D-Bus e apresenta sucesso, senha incorreta e rate limit.
 
 ## Fase 7 — Servidor, autenticação e painel web
 
@@ -815,7 +817,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Reboot offline mantém restrições.
 
-- [ ] Atualização de senha sincroniza e senha antiga deixa de funcionar.
+- [x] Atualização de senha sincroniza e senha antiga deixa de funcionar (teste integrado automatizado, inclusive falha de sincronização offline).
 
 - [ ] Instalação e desinstalação não deixam o sistema sem login.
 
@@ -839,7 +841,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Bloqueio manual remoto é efetivo dentro da latência de heartbeat esperada.
 
-- [ ] Alertas previsíveis são exibidos antes do bloqueio.
+- [x] Alertas previsíveis são exibidos antes do bloqueio (teste real de fim de cota no Zorin).
 
 - [ ] Senha local é definida remotamente, funciona offline e nunca é armazenada em texto puro.
 

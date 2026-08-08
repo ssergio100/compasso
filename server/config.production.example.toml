@@ -1,6 +1,7 @@
 # O origin fica acessível somente ao cloudflared na própria máquina.
 listen_address = "127.0.0.1:8080"
 database_path = "/var/lib/tempo-server/tempo-server.db"
+assets_directory = "/usr/share/tempo-server/web"
 online_timeout = "60s"
 session_lifetime = "8h"
 

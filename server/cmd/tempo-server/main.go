@@ -65,7 +65,9 @@ func run(configPath string, logger *log.Logger) error {
 			logger.Printf("initial administrator created login=%s", bootstrapLogin)
 		}
 	}
-	application, err := web.New(store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout)
+	application, err := web.NewWithAssets(
+		store, settings.SecureCookies, settings.SessionLifetime, settings.AssetsDirectory, settings.OnlineTimeout,
+	)
 	if err != nil {
 		return err
 	}

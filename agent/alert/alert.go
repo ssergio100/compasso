@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -23,6 +24,10 @@ type Alert struct {
 	Body   string
 }
 
+type Notifier interface {
+	Notify(context.Context, Alert) error
+}
+
 // UpcomingAlerts returns the remaining pre-block alerts for the current decision.
 // It returns an empty slice when the monitoring state does not produce a future block,
 // when warningMinutes is negative, or when the next block is already active.
@@ -33,48 +38,66 @@ func UpcomingAlerts(decision policy.Decision, warningMinutes int, now time.Time)
 	if now.IsZero() {
 		return nil, fmt.Errorf("now must be set")
 	}
-	if decision.NextBlockAt.IsZero() || !decision.Allowed {
-		return nil, nil
-	}
-	if !decision.NextBlockAt.After(now) {
-		return nil, nil
-	}
-
-	thresholds := map[time.Time]string{}
-	add := func(at time.Time, kind string) {
-		if !at.After(now) || !at.Before(decision.NextBlockAt) {
-			return
+	plannedAlerts := plannedAlerts(decision, warningMinutes)
+	upcomingAlerts := make([]Alert, 0, len(plannedAlerts))
+	for _, plannedAlert := range plannedAlerts {
+		if plannedAlert.At.After(now) {
+			upcomingAlerts = append(upcomingAlerts, plannedAlert)
 		}
-		thresholds[at] = kind
 	}
+	return upcomingAlerts, nil
+}
 
-	mainAlert := decision.NextBlockAt.Add(-time.Duration(warningMinutes) * time.Minute)
-	add(mainAlert, AlertPrimary)
-	add(decision.NextBlockAt.Add(-5*time.Minute), AlertFiveMinute)
-	add(decision.NextBlockAt.Add(-1*time.Minute), AlertOneMinute)
-
-	if len(thresholds) == 0 {
+// DueAlerts returns notification thresholds crossed since the previous daemon
+// cycle. A zero previousCycle means startup and deliberately emits nothing.
+func DueAlerts(decision policy.Decision, warningMinutes int, previousCycle, now time.Time) ([]Alert, error) {
+	if warningMinutes < 0 {
+		return nil, fmt.Errorf("warning minutes cannot be negative")
+	}
+	if now.IsZero() || (!previousCycle.IsZero() && now.Before(previousCycle)) {
+		return nil, fmt.Errorf("alert cycle times are invalid")
+	}
+	if previousCycle.IsZero() {
 		return nil, nil
 	}
+	var dueAlerts []Alert
+	for _, plannedAlert := range plannedAlerts(decision, warningMinutes) {
+		if plannedAlert.At.After(previousCycle) && !plannedAlert.At.After(now) {
+			dueAlerts = append(dueAlerts, plannedAlert)
+		}
+	}
+	return dueAlerts, nil
+}
+
+func plannedAlerts(decision policy.Decision, warningMinutes int) []Alert {
+	if decision.NextBlockAt.IsZero() || !decision.Allowed {
+		return nil
+	}
+	thresholds := map[time.Time]string{}
+	addThreshold := func(alertTime time.Time, alertKind string) {
+		if alertTime.Before(decision.NextBlockAt) {
+			thresholds[alertTime] = alertKind
+		}
+	}
+	addThreshold(decision.NextBlockAt.Add(-time.Duration(warningMinutes)*time.Minute), AlertPrimary)
+	addThreshold(decision.NextBlockAt.Add(-5*time.Minute), AlertFiveMinute)
+	addThreshold(decision.NextBlockAt.Add(-time.Minute), AlertOneMinute)
 
 	alertTimes := make([]time.Time, 0, len(thresholds))
-	for at := range thresholds {
-		alertTimes = append(alertTimes, at)
+	for alertTime := range thresholds {
+		alertTimes = append(alertTimes, alertTime)
 	}
-	sort.Slice(alertTimes, func(i, j int) bool { return alertTimes[i].Before(alertTimes[j]) })
-
-	alerts := make([]Alert, 0, len(alertTimes))
-	for _, at := range alertTimes {
-		kind := thresholds[at]
-		alerts = append(alerts, Alert{
-			At:     at,
-			Kind:   kind,
-			Reason: decision.NextBlockReason,
-			Title:  titleForKind(kind, decision.NextBlockReason),
-			Body:   bodyForKind(kind, at, decision.NextBlockAt, decision.NextBlockReason),
+	sort.Slice(alertTimes, func(first, second int) bool { return alertTimes[first].Before(alertTimes[second]) })
+	plannedAlerts := make([]Alert, 0, len(alertTimes))
+	for _, alertTime := range alertTimes {
+		alertKind := thresholds[alertTime]
+		plannedAlerts = append(plannedAlerts, Alert{
+			At: alertTime, Kind: alertKind, Reason: decision.NextBlockReason,
+			Title: titleForKind(alertKind, decision.NextBlockReason),
+			Body:  bodyForKind(alertKind, alertTime, decision.NextBlockAt, decision.NextBlockReason),
 		})
 	}
-	return alerts, nil
+	return plannedAlerts
 }
 
 func titleForKind(kind string, reason policy.Reason) string {

@@ -74,3 +74,22 @@ func TestRunReturnsDeniedForBlockedControlledUser(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q, want denied", code, stderr.String())
 	}
 }
+
+func TestEmergencyBypassAllowsBlockedControlledUser(t *testing.T) {
+	bypassFilePath := filepath.Join(t.TempDir(), "compasso-pam-bypass")
+	if err := os.WriteFile(bypassFilePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(key string) string {
+		if key == "PAM_USER" {
+			return "child"
+		}
+		return ""
+	}
+	missingConfigurationPath := filepath.Join(t.TempDir(), "missing.toml")
+	if code := runWithEmergencyBypass(
+		[]string{"-config", missingConfigurationPath}, getenv, os.Stderr, time.Now(), bypassFilePath,
+	); code != exitAllowed {
+		t.Fatalf("code=%d, want emergency login allowed", code)
+	}
+}

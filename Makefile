@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-server fmt fmt-check lint test test-go test-ui test-migrations test-security clean
+.PHONY: all build build-agent build-server package-client fmt fmt-check lint test test-go test-ui test-migrations test-security clean
 
 all: test
 
@@ -14,6 +14,9 @@ build-agent:
 build-server:
 	mkdir -p bin
 	go build -o bin/tempo-server ./server/cmd/tempo-server
+
+package-client: build-agent
+	./scripts/build-client-package.sh
 
 fmt:
 	gofmt -w $$(find agent server protocol -type f -name '*.go' 2>/dev/null)

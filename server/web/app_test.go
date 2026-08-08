@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,14 +77,23 @@ func TestAdministrativeWorkflowAndCSRF(t *testing.T) {
 	for day := 0; day < 7; day++ {
 		quotaValues.Set("quota_"+string(rune('0'+day)), "00:00")
 	}
-	quotaValues.Set("quota_1", "02:00")
+	quotaValues.Set("quota_1", "08:00")
 	quotaValues.Set("quota_2", "00:45")
 	if response := fixture.post("/devices/"+deviceID+"/quotas", quotaValues); response.Code != http.StatusSeeOther {
 		t.Fatalf("save quotas status=%d body=%s", response.Code, response.Body.String())
 	}
 	_, storedPolicy, err := fixture.store.LoadDevice(context.Background(), deviceID)
-	if err != nil || storedPolicy.WeeklyQuota[time.Monday] != 7200 || storedPolicy.WeeklyQuota[time.Tuesday] != 2700 {
+	if err != nil || storedPolicy.WeeklyQuota[time.Monday] != 28800 || storedPolicy.WeeklyQuota[time.Tuesday] != 2700 {
 		t.Fatalf("independent quotas=%v err=%v", storedPolicy.WeeklyQuota, err)
+	}
+	if response := fixture.post("/devices/"+deviceID+"/bonus", url.Values{"minutes": {"10"}}); response.Code != http.StatusSeeOther {
+		t.Fatalf("add bonus status=%d body=%s", response.Code, response.Body.String())
+	}
+	allowancePage := fixture.get("/devices/" + deviceID)
+	if allowancePage.Code != http.StatusOK || !strings.Contains(allowancePage.Body.String(), "Cota de hoje") ||
+		!strings.Contains(allowancePage.Body.String(), "<strong>08:00</strong>") ||
+		!strings.Contains(allowancePage.Body.String(), "data-remaining-seconds=\"29400\"") {
+		t.Fatalf("page did not keep quota fixed while adding extra time to remaining: status=%d", allowancePage.Code)
 	}
 
 	routineValues := url.Values{
@@ -124,6 +134,42 @@ func TestExpiredSessionRedirectsToLogin(t *testing.T) {
 	response := fixture.get("/devices")
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login" {
 		t.Fatalf("expired session status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestExternalTemplateChangesAppearWithoutRestart(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	assetsDirectory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(assetsDirectory, "templates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, templateName := range []string{"base.html", "login.html", "devices.html", "device.html"} {
+		templateContents, err := os.ReadFile(filepath.Join("templates", templateName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(assetsDirectory, "templates", templateName), templateContents, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	application, err := NewWithAssets(fixture.store, false, time.Hour, assetsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginTemplatePath := filepath.Join(assetsDirectory, "templates", "login.html")
+	loginTemplate, err := os.ReadFile(loginTemplatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedLoginTemplate := strings.Replace(string(loginTemplate), "Entrar", "Acesso atualizado", 1)
+	if err := os.WriteFile(loginTemplatePath, []byte(updatedLoginTemplate), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	application.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/login", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Acesso atualizado") {
+		t.Fatalf("external template was not reloaded: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -179,7 +225,7 @@ func newWebFixture(t testContext, secure bool, lifetime time.Duration) *webFixtu
 	if _, err := store.BootstrapAdmin(ctx, "admin", hash, now); err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(store, secure, lifetime)
+	app, err := NewWithAssets(store, secure, lifetime, ".")
 	if err != nil {
 		t.Fatal(err)
 	}

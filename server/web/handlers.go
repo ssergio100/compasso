@@ -279,7 +279,8 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 		http.Error(w, "Falha ao carregar histórico.", http.StatusInternalServerError)
 		return
 	}
-	remaining := storedPolicy.WeeklyQuota[a.now().Weekday()] + summary.BonusSeconds - summary.UsedSeconds
+	todayQuota := storedPolicy.WeeklyQuota[a.now().Weekday()]
+	remaining := todayQuota + summary.BonusSeconds - summary.UsedSeconds
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -302,8 +303,13 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 			Start: time.Duration(routine.Start) * time.Second, End: time.Duration(routine.End) * time.Second,
 		})
 	}
-	if decision, evaluationErr := policy.Evaluate(decisionInput); evaluationErr == nil && !decision.NextBlockAt.IsZero() {
-		nextBlock = decision.NextBlockAt.Format("02/01 15:04")
+	online := isOnline(device.LastSeenAt, a.now(), a.onlineTimeout)
+	counting := false
+	if decision, evaluationErr := policy.Evaluate(decisionInput); evaluationErr == nil {
+		counting = decision.ShouldCount && online
+		if !decision.NextBlockAt.IsZero() {
+			nextBlock = decision.NextBlockAt.Format("02/01 15:04")
+		}
 	}
 	var editRoutine *storage.Routine
 	if editID := r.URL.Query().Get("edit_routine"); editID != "" {
@@ -317,9 +323,9 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 	a.render(w, "device", status, pageData{
 		Title: device.Name, Login: current.Login, CSRF: current.CSRF,
 		Device: device, Policy: storedPolicy, Events: events, EditRoutine: editRoutine,
-		TodayUsed: summary.UsedSeconds, TodayBonus: summary.BonusSeconds,
-		Remaining: remaining, NextBlock: nextBlock, PasswordSet: storedPolicy.LocalPasswordVerifier != "",
-		Online: isOnline(device.LastSeenAt, a.now(), a.onlineTimeout), LastSeen: formatLastSeen(device.LastSeenAt),
+		TodayQuota: todayQuota, TodayUsed: summary.UsedSeconds,
+		Remaining: remaining, Counting: counting, NextBlock: nextBlock, PasswordSet: storedPolicy.LocalPasswordVerifier != "",
+		Online: online, LastSeen: formatLastSeen(device.LastSeenAt),
 		DeviceToken:  deviceToken,
 		WeekdayNames: []string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"},
 		Error:        message, Success: r.URL.Query().Get("success"),

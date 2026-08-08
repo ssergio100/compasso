@@ -14,6 +14,7 @@ import (
 type Config struct {
 	ListenAddress   string
 	DatabasePath    string
+	AssetsDirectory string
 	SecureCookies   bool
 	SessionLifetime time.Duration
 	OnlineTimeout   time.Duration
@@ -52,6 +53,7 @@ func Load(path string) (Config, error) {
 	}
 	configuration := Config{
 		ListenAddress: values["listen_address"], DatabasePath: values["database_path"],
+		AssetsDirectory: valueOrDefault(values["assets_directory"], "./server/web"),
 		SessionLifetime: 8 * time.Hour, OnlineTimeout: 60 * time.Second,
 	}
 	if value := values["secure_cookies"]; value != "" {
@@ -79,8 +81,8 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
-	if c.ListenAddress == "" || c.DatabasePath == "" {
-		return errors.New("listen_address and database_path are required")
+	if c.ListenAddress == "" || c.DatabasePath == "" || c.AssetsDirectory == "" {
+		return errors.New("listen_address, database_path and assets_directory are required")
 	}
 	if c.SessionLifetime < time.Minute || c.SessionLifetime > 7*24*time.Hour {
 		return errors.New("session_lifetime must be between 1 minute and 7 days")
@@ -89,6 +91,13 @@ func (c Config) Validate() error {
 		return errors.New("online_timeout must be between 10 seconds and 10 minutes")
 	}
 	return nil
+}
+
+func valueOrDefault(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func stripComment(line string) string {

@@ -49,19 +49,23 @@
 <section class="summary-grid">
   <div class="card metric featured">
     <span>Tempo restante</span>
-    <strong>{{duration .Remaining}}</strong>
+    <strong id="remaining-time" data-remaining-seconds="{{.Remaining}}" data-counting="{{.Counting}}">{{duration .Remaining}}</strong>
+  </div>
+  <div class="card metric">
+    <span>Cota de hoje</span>
+    <strong>{{duration .TodayQuota}}</strong>
   </div>
   <div class="card metric">
     <span>Usado hoje</span>
-    <strong>{{duration .TodayUsed}}</strong>
-  </div>
-  <div class="card metric">
-    <span>Bônus hoje</span>
-    <strong>{{duration .TodayBonus}}</strong>
+    <strong id="used-time" data-used-seconds="{{.TodayUsed}}">{{duration .TodayUsed}}</strong>
   </div>
   <div class="card metric">
     <span>Próximo bloqueio</span>
-    <strong class="small-metric">{{.NextBlock}}</strong>
+    <strong class="small-metric">
+      {{if .Policy.MonitoringPaused}}Vigilância pausada
+      {{else if .Policy.ManualBlock}}Bloqueio manual ativo
+      {{else}}{{.NextBlock}}{{end}}
+    </strong>
   </div>
 </section>
 

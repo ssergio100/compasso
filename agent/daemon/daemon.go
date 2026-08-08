@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/sergio/compasso/agent/alert"
 	"github.com/sergio/compasso/agent/policy"
 	"github.com/sergio/compasso/agent/session"
 	"github.com/sergio/compasso/agent/storage"
@@ -20,6 +21,7 @@ type Status struct {
 	Decision         policy.Decision
 	GraphicalSession bool
 	UsageSeconds     int64
+	DueAlerts        []alert.Alert
 }
 
 // Daemon owns the runtime state that is intentionally not persisted between
@@ -38,6 +40,11 @@ type Daemon struct {
 	lastCountUntil  time.Time
 	fraction        time.Duration
 	terminated      map[string]bool
+	alertNotifier   alert.Notifier
+}
+
+func (d *Daemon) SetAlertNotifier(notifier alert.Notifier) {
+	d.alertNotifier = notifier
 }
 
 // New creates a daemon controller. Call Step periodically or Run for the
@@ -123,6 +130,12 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		Decision: decision, GraphicalSession: len(graphical) != 0,
 		UsageSeconds: d.tracker.Seconds(),
 	}
+	if len(graphical) != 0 {
+		status.DueAlerts, err = alert.DueAlerts(decision, snapshot.WarningMinutes, d.lastAt, now)
+		if err != nil {
+			return Status{}, fmt.Errorf("calculate due alerts: %w", err)
+		}
+	}
 	// Advance runtime accounting state before enforcement. A transient logout
 	// failure must not cause the same elapsed interval to be counted twice.
 	d.lastAt = now
@@ -183,6 +196,15 @@ func (d *Daemon) Run(ctx context.Context, tick time.Duration, logger *log.Logger
 		if lastError != "" {
 			logger.Printf("agent cycle recovered")
 			lastError = ""
+		}
+		for _, dueAlert := range status.DueAlerts {
+			if d.alertNotifier == nil {
+				logger.Printf("desktop alert unavailable kind=%s", dueAlert.Kind)
+				continue
+			}
+			if err := d.alertNotifier.Notify(ctx, dueAlert); err != nil {
+				logger.Printf("desktop alert failed kind=%s: %v", dueAlert.Kind, err)
+			}
 		}
 		summary := fmt.Sprintf("%s:%t", status.Decision.Reason, status.GraphicalSession)
 		if summary != lastSummary {

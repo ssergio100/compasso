@@ -50,6 +50,21 @@ func TestBonusDoesNotOverrideRoutine(t *testing.T) {
 	}
 }
 
+func TestDailyBonusExtendsAllowanceWhileUsageContinues(t *testing.T) {
+	now := instant(2026, time.August, 8, 12, 0) // Saturday.
+	input := baseInput(now)
+	input.Quota[time.Saturday] = 8 * time.Hour
+	input.Bonus = 10 * time.Minute
+	input.Consumed = 2 * time.Hour
+	decision := mustEvaluate(t, input)
+	if decision.Remaining != 6*time.Hour+10*time.Minute {
+		t.Fatalf("remaining=%s, want 6h10m", decision.Remaining)
+	}
+	if expectedBlock := now.Add(6*time.Hour + 10*time.Minute); !decision.NextBlockAt.Equal(expectedBlock) {
+		t.Fatalf("next block=%s, want %s", decision.NextBlockAt, expectedBlock)
+	}
+}
+
 func TestOvernightRoutineBoundaries(t *testing.T) {
 	routine := Routine{Name: "sleep", Days: weekdays(time.Monday), Start: 22 * time.Hour, End: 8 * time.Hour}
 	tests := []struct {

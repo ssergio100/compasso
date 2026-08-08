@@ -2,12 +2,12 @@
 package web
 
 import (
+	"bytes"
 	"crypto/subtle"
-	"embed"
 	"fmt"
 	"html/template"
-	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,17 +19,15 @@ const (
 	loginCSRFCookie   = "tempo_login_csrf"
 )
 
-//go:embed templates/*.html static/*
-var assets embed.FS
-
 type App struct {
-	store         *storage.Store
-	sessions      *sessionStore
-	secureCookies bool
-	onlineTimeout time.Duration
-	now           func() time.Time
-	templates     map[string]*template.Template
-	handler       http.Handler
+	store             *storage.Store
+	sessions          *sessionStore
+	secureCookies     bool
+	onlineTimeout     time.Duration
+	assetsDirectory   string
+	templateFunctions template.FuncMap
+	now               func() time.Time
+	handler           http.Handler
 }
 
 type pageData struct {
@@ -43,9 +41,10 @@ type pageData struct {
 	Policy       storage.Policy
 	Events       []storage.AuditEvent
 	EditRoutine  *storage.Routine
+	TodayQuota   int64
 	TodayUsed    int64
-	TodayBonus   int64
 	Remaining    int64
+	Counting     bool
 	NextBlock    string
 	PasswordSet  bool
 	Online       bool
@@ -54,11 +53,17 @@ type pageData struct {
 	WeekdayNames []string
 }
 
-func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration, configuredOnlineTimeout ...time.Duration) (*App, error) {
+// NewWithAssets creates the HTTP application with an external frontend. HTML
+// templates are parsed from disk for every page response so development edits
+// do not require rebuilding or restarting the Go server.
+func NewWithAssets(store *storage.Store, secureCookies bool, sessionLifetime time.Duration, assetsDirectory string, configuredOnlineTimeout ...time.Duration) (*App, error) {
 	if store == nil {
 		return nil, fmt.Errorf("server store is required")
 	}
-	functions := template.FuncMap{
+	if assetsDirectory == "" {
+		return nil, fmt.Errorf("frontend assets directory is required")
+	}
+	templateFunctions := template.FuncMap{
 		"duration": formatDuration,
 		"clock":    formatClock,
 		"dayNames": selectedDayNames,
@@ -81,13 +86,11 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 			return kind
 		},
 	}
-	templates := make(map[string]*template.Template)
+	cleanAssetsDirectory := filepath.Clean(assetsDirectory)
 	for _, page := range []string{"login", "devices", "device"} {
-		parsed, err := template.New("base.html").Funcs(functions).ParseFS(assets, "templates/base.html", "templates/"+page+".html")
-		if err != nil {
+		if _, err := parsePageTemplate(cleanAssetsDirectory, templateFunctions, page); err != nil {
 			return nil, fmt.Errorf("parse %s template: %w", page, err)
 		}
-		templates[page] = parsed
 	}
 	onlineTimeout := 60 * time.Second
 	if len(configuredOnlineTimeout) != 0 {
@@ -98,11 +101,12 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 	}
 	app := &App{
 		store: store, sessions: newSessionStore(sessionLifetime), secureCookies: secureCookies,
-		now: time.Now, templates: templates, onlineTimeout: onlineTimeout,
+		now: time.Now, onlineTimeout: onlineTimeout, assetsDirectory: cleanAssetsDirectory,
+		templateFunctions: templateFunctions,
 	}
 	mux := http.NewServeMux()
-	staticFS, _ := fs.Sub(assets, "static")
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	staticDirectory := filepath.Join(cleanAssetsDirectory, "static")
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDirectory))))
 	mux.HandleFunc("/login", app.login)
 	mux.HandleFunc("/logout", app.logout)
 	mux.HandleFunc("/api/v1/device/heartbeat", app.heartbeat)
@@ -122,11 +126,29 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
 
 func (a *App) render(w http.ResponseWriter, page string, status int, data pageData) {
+	pageTemplate, err := parsePageTemplate(a.assetsDirectory, a.templateFunctions, page)
+	if err != nil {
+		http.Error(w, "Falha ao carregar a interface.", http.StatusInternalServerError)
+		return
+	}
+	var renderedPage bytes.Buffer
+	if err := pageTemplate.ExecuteTemplate(&renderedPage, "base", data); err != nil {
+		http.Error(w, "Falha ao renderizar a página.", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	if err := a.templates[page].ExecuteTemplate(w, "base", data); err != nil {
-		http.Error(w, "Falha ao renderizar a página.", http.StatusInternalServerError)
+	_, _ = renderedPage.WriteTo(w)
+}
+
+func parsePageTemplate(assetsDirectory string, functions template.FuncMap, page string) (*template.Template, error) {
+	allowedPages := map[string]bool{"login": true, "devices": true, "device": true}
+	if !allowedPages[page] {
+		return nil, fmt.Errorf("unknown page %q", page)
 	}
+	baseTemplatePath := filepath.Join(assetsDirectory, "templates", "base.html")
+	pageTemplatePath := filepath.Join(assetsDirectory, "templates", page+".html")
+	return template.New("base.html").Funcs(functions).ParseFiles(baseTemplatePath, pageTemplatePath)
 }
 
 func (a *App) authenticated(r *http.Request) (session, string, bool) {

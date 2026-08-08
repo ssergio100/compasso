@@ -12,6 +12,7 @@ func TestLoad(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`
 listen_address = "127.0.0.1:8080"
 database_path = "./var/server.db"
+assets_directory = "./web-assets"
 secure_cookies = false
 session_lifetime = "2h"
 `), 0o600); err != nil {
@@ -21,7 +22,7 @@ session_lifetime = "2h"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configuration.ListenAddress != "127.0.0.1:8080" || configuration.SecureCookies || configuration.SessionLifetime != 2*time.Hour {
+	if configuration.ListenAddress != "127.0.0.1:8080" || configuration.AssetsDirectory != "./web-assets" || configuration.SecureCookies || configuration.SessionLifetime != 2*time.Hour {
 		t.Fatalf("unexpected config: %+v", configuration)
 	}
 }

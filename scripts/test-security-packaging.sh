@@ -4,6 +4,10 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 systemd_unit="${project_root}/packaging/systemd/tempo-agent.service"
 installer="${project_root}/scripts/install-agent-securely.sh"
+pilot_installer="${project_root}/scripts/install-pilot-components.sh"
+pilot_uninstaller="${project_root}/scripts/uninstall-compasso.sh"
+pilot_recovery="${project_root}/scripts/recover-pilot-login.sh"
+package_builder="${project_root}/scripts/build-client-package.sh"
 dockerfile="${project_root}/server/Dockerfile"
 dockerignore="${project_root}/.dockerignore"
 
@@ -39,7 +43,14 @@ for required_directive in "${required_directives[@]}"; do
 done
 
 bash -n "${installer}"
+bash -n "${pilot_installer}"
+bash -n "${pilot_uninstaller}"
+bash -n "${pilot_recovery}"
+bash -n "${project_root}/scripts/schedule-pilot-recovery.sh"
+bash -n "${package_builder}"
 grep -Fqx 'USER tempo-server:tempo-server' "${dockerfile}"
+grep -Fq 'server/web/templates /usr/share/tempo-server/web/templates' "${dockerfile}"
+grep -Fq 'server/web/static /usr/share/tempo-server/web/static' "${dockerfile}"
 grep -Fqx '**/config.toml' "${dockerignore}"
 if command -v docker >/dev/null 2>&1; then
   docker compose -f "${project_root}/compose.production.yml" config --quiet

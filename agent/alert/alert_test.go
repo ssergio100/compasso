@@ -88,3 +88,24 @@ func TestUpcomingAlertsSkipsPastPrimaryAlert(t *testing.T) {
 		t.Fatalf("unexpected alert kinds = %v", []string{alerts[0].Kind, alerts[1].Kind})
 	}
 }
+
+func TestDueAlertsReturnsOnlyCrossedThreshold(t *testing.T) {
+	blockAt := time.Date(2026, 8, 8, 14, 2, 0, 0, time.Local)
+	decision := policy.Decision{Allowed: true, NextBlockAt: blockAt, NextBlockReason: policy.ReasonQuota}
+	dueAlerts, err := DueAlerts(
+		decision, 1,
+		time.Date(2026, 8, 8, 14, 0, 59, 0, time.Local),
+		time.Date(2026, 8, 8, 14, 1, 0, 0, time.Local),
+	)
+	if err != nil || len(dueAlerts) != 1 || dueAlerts[0].Kind != AlertOneMinute {
+		t.Fatalf("due alerts=%+v err=%v", dueAlerts, err)
+	}
+	dueAlerts, err = DueAlerts(
+		decision, 1,
+		time.Date(2026, 8, 8, 14, 1, 0, 0, time.Local),
+		time.Date(2026, 8, 8, 14, 1, 1, 0, time.Local),
+	)
+	if err != nil || len(dueAlerts) != 0 {
+		t.Fatalf("threshold was delivered repeatedly: %+v err=%v", dueAlerts, err)
+	}
+}

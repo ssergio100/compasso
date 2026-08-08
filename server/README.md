@@ -18,6 +18,12 @@ TEMPO_ADMIN_LOGIN=admin TEMPO_ADMIN_PASSWORD='uma-senha-de-teste' \
 Abra `http://127.0.0.1:8080`. Depois que o primeiro administrador existe, as
 variáveis podem ser omitidas; elas nunca substituem uma conta já criada.
 
+O painel não é embutido no executável. `assets_directory` aponta para os
+templates HTML e arquivos estáticos externos. Durante o desenvolvimento, uma
+alteração nesses arquivos aparece ao atualizar o navegador, sem recompilar ou
+reiniciar o servidor. Essa fronteira também permite substituir a interface por
+um build React ou outra tecnologia no futuro sem misturá-la ao núcleo Go.
+
 Em produção, `secure_cookies` deve ser `true`. O SQLite definido por
 `database_path` precisa ficar em volume persistente do servidor Docker.
 

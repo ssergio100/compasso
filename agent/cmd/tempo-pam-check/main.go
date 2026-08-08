@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	exitAllowed = 0
-	exitDenied  = 1
+	exitAllowed             = 0
+	exitDenied              = 1
+	emergencyBypassFilePath = "/run/compasso-pam-bypass"
 )
 
 func main() {
@@ -26,6 +27,15 @@ func main() {
 // the graphical login permanently unusable. A valid blocking policy is the
 // only condition that returns exitDenied.
 func run(args []string, getenv func(string) string, stderr io.Writer, now time.Time) int {
+	return runWithEmergencyBypass(args, getenv, stderr, now, emergencyBypassFilePath)
+}
+
+func runWithEmergencyBypass(args []string, getenv func(string) string, stderr io.Writer, now time.Time, bypassFilePath string) int {
+	if _, err := os.Stat(bypassFilePath); err == nil {
+		return exitAllowed
+	} else if !os.IsNotExist(err) {
+		return failOpen(stderr, fmt.Errorf("inspect emergency bypass: %w", err))
+	}
 	flags := flag.NewFlagSet("tempo-pam-check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "/etc/tempo-agent/config.toml", "agent configuration path")

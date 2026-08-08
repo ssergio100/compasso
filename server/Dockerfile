@@ -17,6 +17,8 @@ RUN groupadd --system tempo-server \
 
 COPY --from=builder --chown=root:root /out/tempo-server /usr/local/bin/tempo-server
 COPY --chown=root:tempo-server server/config.docker.toml /etc/tempo-server/config.toml
+COPY --chown=root:root server/web/templates /usr/share/tempo-server/web/templates
+COPY --chown=root:root server/web/static /usr/share/tempo-server/web/static
 
 USER tempo-server:tempo-server
 EXPOSE 8080
