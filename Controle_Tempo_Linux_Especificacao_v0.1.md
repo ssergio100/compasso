@@ -637,11 +637,11 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Matar processo e verificar restart automático pelo systemd.
 
-- [ ] Cota expira durante sessão e a sessão é terminada.
+- [x] Cota expira durante sessão e a sessão é terminada (teste automatizado com sessão simulada).
 
-- [ ] Rotina começa durante sessão e a sessão é terminada.
+- [x] Rotina começa durante sessão e a sessão é terminada (teste automatizado com sessão simulada).
 
-- [ ] Pausa recebida antes do bloqueio impede logout e para contador.
+- [x] Pausa recebida antes do bloqueio impede logout e para contador (teste automatizado).
 
 ## Fase 4 — Gate PAM contra relogin
 

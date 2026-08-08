@@ -1,6 +1,11 @@
 # Configuração de desenvolvimento do tempo-agent.
-state_dir = "./var/agent"
 database_path = "./var/agent/tempo-agent.db"
+controlled_user = "usuario_controlado"
+tick_interval = "1s"
+checkpoint_interval = "5s"
+loginctl_path = "/usr/bin/loginctl"
+
+# Usado a partir da fase de sincronização. Nunca é fixado no código.
 server_url = "http://127.0.0.1:8080"
 heartbeat_interval = "10s"
 log_level = "debug"
