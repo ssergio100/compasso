@@ -783,9 +783,9 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Usuário comum não consegue alterar SQLite/config do agente.
+- [x] Usuário comum não consegue alterar SQLite/config do agente (teste real no Zorin após instalação root).
 
-- [ ] Usuário comum não consegue parar serviço.
+- [x] Usuário comum não consegue parar serviço (teste real no Zorin; systemd exigiu autenticação e o serviço permaneceu ativo).
 
 - [x] Token revogado deixa de autenticar (teste automatizado de persistência e autenticação).
 

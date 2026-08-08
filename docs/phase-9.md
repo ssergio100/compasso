@@ -53,6 +53,10 @@ docker compose -f compose.production.yml build
 
 ## Instalação segura do agente no Zorin
 
+- [x] Agente instalado como serviço root com configuração `0600`, estado `0700` e sem alteração do PAM.
+- [x] Usuário comum sem autenticação administrativa não lê/altera o estado e não consegue parar o serviço.
+- [x] Serviço permaneceu ativo e o dispositivo retornou a `ONLINE` no painel.
+
 Não instale o gate PAM durante este teste. Antes de iniciar, mantenha a política
 remota em **Pausar vigilância** para impedir logout acidental.
 
