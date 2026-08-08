@@ -6,8 +6,45 @@
     <p class="eyebrow">AGORA</p>
     <h1>{{.Device.Name}}</h1>
   </div>
-  <span class="status offline">AGUARDANDO CONEXÃO</span>
+  <div class="connection-state">
+    {{if .Online}}<span class="status online">ONLINE</span>{{else}}<span class="status offline">OFFLINE</span>{{end}}
+    <small>{{.LastSeen}}</small>
+  </div>
 </div>
+
+<section class="card action-panel">
+  <div>
+    <p class="eyebrow">AÇÕES IMEDIATAS</p>
+    <p class="muted">Executadas no próximo heartbeat. Política aplicada: revisão {{.Device.AppliedPolicyRevision}} de {{.Policy.Revision}}.</p>
+  </div>
+  <div class="action-grid">
+    <form method="post" action="/devices/{{.Device.ID}}/bonus" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <label>Tempo extra (min)<input type="number" name="minutes" min="1" max="720" value="30" required></label>
+      <button class="primary" type="submit">Adicionar</button>
+    </form>
+    <form method="post" action="/devices/{{.Device.ID}}/control">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{if .Policy.MonitoringPaused}}
+      <input type="hidden" name="command" value="resume_monitoring">
+      <button class="secondary" type="submit">Retomar vigilância</button>
+      {{else}}
+      <input type="hidden" name="command" value="pause_monitoring">
+      <button class="secondary" type="submit">Pausar vigilância</button>
+      {{end}}
+    </form>
+    <form method="post" action="/devices/{{.Device.ID}}/control">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      {{if .Policy.ManualBlock}}
+      <input type="hidden" name="command" value="clear_manual_block">
+      <button class="secondary" type="submit">Remover bloqueio</button>
+      {{else}}
+      <input type="hidden" name="command" value="block_now">
+      <button class="danger" type="submit">Bloquear agora</button>
+      {{end}}
+    </form>
+  </div>
+</section>
 
 <section class="summary-grid">
   <div class="card metric featured">
@@ -47,6 +84,24 @@
     </label>
     <button class="primary" type="submit">Salvar cotas</button>
   </form>
+</section>
+
+<section class="card">
+  <p class="eyebrow">PAREAMENTO</p>
+  <h2>Credencial do agente</h2>
+  {{if .DeviceToken}}
+  <p class="notice success">Copie agora. Este token não será mostrado novamente.</p>
+  <dl class="credential-grid">
+    <div><dt>device_id</dt><dd><code>{{.Device.ID}}</code></dd></div>
+    <div><dt>device_token</dt><dd><code>{{.DeviceToken}}</code></dd></div>
+  </dl>
+  {{else}}
+  <p class="muted">Gerar uma nova credencial invalida imediatamente qualquer token anterior.</p>
+  <form method="post" action="/devices/{{.Device.ID}}/token">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <button class="secondary" type="submit">Gerar novo token</button>
+  </form>
+  {{end}}
 </section>
 
 <section class="card">

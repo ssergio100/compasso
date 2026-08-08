@@ -757,15 +757,17 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Cliente revision 10 recebe revision 11 e aplica imediatamente.
+- [x] Cliente revision 10 recebe revision 11 e aplica imediatamente (teste integrado automatizado).
 
-- [ ] Perder Internet por 30 min mantém política e consumo.
+- [x] Perder Internet por 30 min mantém política e consumo (teste integrado automatizado).
 
-- [ ] Bônus local offline é enviado uma única vez ao reconectar.
+- [x] Bônus local offline é enviado uma única vez ao reconectar (teste integrado automatizado).
 
-- [ ] Servidor recebe heartbeat duplicado sem duplicar consumo/eventos.
+- [x] Servidor recebe heartbeat duplicado sem duplicar consumo/eventos (teste automatizado de persistência).
 
-- [ ] Alterar cota remotamente reduz saldo e bloqueia imediatamente quando o novo saldo fica <= 0.
+- [x] Alterar cota remotamente reduz saldo e bloqueia imediatamente quando o novo saldo fica <= 0 (teste integrado automatizado).
+
+- [x] No Zorin, o pareamento e as transições online, offline e reconectado são aprovados no painel.
 
 ## Fase 9 — Segurança e hardening
 

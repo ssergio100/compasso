@@ -10,9 +10,10 @@
 <div class="device-grid">
   {{range .Devices}}
   <a class="card device-card" href="/devices/{{.ID}}">
-    <span class="status offline">AGUARDANDO CONEXÃO</span>
+    {{if .Online}}<span class="status online">ONLINE</span>{{else}}<span class="status offline">OFFLINE</span>{{end}}
     <h2>{{.Name}}</h2>
     <p>Política revisão {{.PolicyRevision}}</p>
+    <p class="muted">Aplicada pelo cliente: revisão {{.AppliedPolicyRevision}}</p>
   </a>
   {{else}}
   <div class="card empty-state">

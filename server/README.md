@@ -21,8 +21,10 @@ variáveis podem ser omitidas; elas nunca substituem uma conta já criada.
 Em produção, `secure_cookies` deve ser `true`. O SQLite definido por
 `database_path` precisa ficar em volume persistente do servidor Docker.
 
-## Fase 7
+## Fases 7 e 8
 
 O painel implementa login, expiração de sessão, CSRF, dispositivos, cotas
-semanais, rotinas, senha local Argon2id, dashboard e histórico. Status real do
-cliente e comandos remotos pertencem à sincronização da fase 8.
+semanais, rotinas, senha local Argon2id, dashboard e histórico. A API de
+heartbeat autentica cada dispositivo, consolida consumo/eventos de forma
+idempotente e entrega política e comandos. O painel mostra conexão e revisão
+aplicada pelo agente.

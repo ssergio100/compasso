@@ -20,11 +20,13 @@ type Admin struct {
 }
 
 type Device struct {
-	ID             string
-	Name           string
-	LastSeenAt     *time.Time
-	PolicyRevision int64
-	CreatedAt      time.Time
+	ID                    string
+	Name                  string
+	LastSeenAt            *time.Time
+	PolicyRevision        int64
+	AppliedPolicyRevision int64
+	CreatedAt             time.Time
+	Online                bool
 }
 
 type Policy struct {
@@ -35,6 +37,7 @@ type Policy struct {
 	LocalPasswordVerifier string
 	WeeklyQuota           [7]int64
 	Routines              []Routine
+	UpdatedAt             time.Time
 }
 
 type Routine struct {
@@ -141,7 +144,7 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, created_at FROM device ORDER BY name, id`)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device ORDER BY name, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
@@ -151,7 +154,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 		var device Device
 		var lastSeen sql.NullString
 		var created string
-		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &created); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created); err != nil {
 			return nil, err
 		}
 		device.CreatedAt, err = parseTime(created)
@@ -175,8 +178,8 @@ func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, erro
 	var lastSeen sql.NullString
 	var created string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, created_at FROM device WHERE id=?`, id,
-	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &created)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device WHERE id=?`, id,
+	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, Policy{}, ErrNotFound
 	}
@@ -414,14 +417,19 @@ func (s *Store) InsertAudit(ctx context.Context, deviceID, kind string, payload 
 func (s *Store) loadPolicy(ctx context.Context, deviceID string) (Policy, error) {
 	var policy Policy
 	var paused, blocked int
+	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT revision, monitoring_paused, manual_block, warning_minutes,
-		COALESCE(local_password_verifier, '') FROM policy WHERE device_id=?`, deviceID,
-	).Scan(&policy.Revision, &paused, &blocked, &policy.WarningMinutes, &policy.LocalPasswordVerifier)
+		COALESCE(local_password_verifier, ''), updated_at FROM policy WHERE device_id=?`, deviceID,
+	).Scan(&policy.Revision, &paused, &blocked, &policy.WarningMinutes, &policy.LocalPasswordVerifier, &updatedAt)
 	if err != nil {
 		return Policy{}, err
 	}
 	policy.MonitoringPaused, policy.ManualBlock = paused != 0, blocked != 0
+	policy.UpdatedAt, err = parseTime(updatedAt)
+	if err != nil {
+		return Policy{}, err
+	}
 	quotaRows, err := s.db.QueryContext(ctx, `SELECT weekday, seconds_allowed FROM weekly_quota WHERE device_id=?`, deviceID)
 	if err != nil {
 		return Policy{}, err

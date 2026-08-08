@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -17,6 +18,7 @@ import (
 	"github.com/sergio/compasso/agent/localauth"
 	"github.com/sergio/compasso/agent/session"
 	"github.com/sergio/compasso/agent/storage"
+	"github.com/sergio/compasso/agent/syncclient"
 )
 
 func main() {
@@ -73,5 +75,22 @@ func run(configPath string, logger *log.Logger) error {
 		logger.Printf("local D-Bus API ready name=%s", localapi.BusName)
 	}
 	logger.Printf("starting controlled_user=%s database=%s", settings.ControlledUser, settings.DatabasePath)
+	if settings.SyncEnabled() {
+		synchronizer, err := syncclient.New(store, &http.Client{Timeout: settings.HTTPTimeout}, syncclient.Config{
+			ServerURL: settings.ServerURL, DeviceID: settings.DeviceID,
+			DeviceToken: settings.DeviceToken, HeartbeatInterval: settings.HeartbeatInterval,
+		})
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := synchronizer.Run(ctx, logger); err != nil {
+				logger.Printf("synchronization stopped: %v", err)
+			}
+		}()
+		logger.Printf("synchronization enabled server=%s device_id=%s", settings.ServerURL, settings.DeviceID)
+	} else {
+		logger.Printf("synchronization disabled; local policy remains available offline")
+	}
 	return agent.Run(ctx, settings.TickInterval, logger)
 }

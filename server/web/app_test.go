@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sergio/compasso/agent/localauth"
+	protocol "github.com/sergio/compasso/protocol/v1"
 	serverstorage "github.com/sergio/compasso/server/storage"
 )
 
@@ -118,6 +121,36 @@ func TestExpiredSessionRedirectsToLogin(t *testing.T) {
 	response := fixture.get("/devices")
 	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login" {
 		t.Fatalf("expired session status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestHeartbeatRequiresDeviceCredential(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := fixture.store.IssueDeviceToken(context.Background(), device.ID, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(protocol.HeartbeatRequest{LocalDate: fixture.now.Format("2006-01-02")})
+	request := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath, bytes.NewReader(payload))
+	request.Header.Set(deviceIDHeader, device.ID)
+	request.Header.Set("Authorization", "Bearer wrong")
+	response := httptest.NewRecorder()
+	fixture.app.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath, bytes.NewReader(payload))
+	request.Header.Set(deviceIDHeader, device.ID)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	fixture.app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("valid token status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

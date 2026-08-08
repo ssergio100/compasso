@@ -26,6 +26,7 @@ type App struct {
 	store         *storage.Store
 	sessions      *sessionStore
 	secureCookies bool
+	onlineTimeout time.Duration
 	now           func() time.Time
 	templates     map[string]*template.Template
 	handler       http.Handler
@@ -47,10 +48,13 @@ type pageData struct {
 	Remaining    int64
 	NextBlock    string
 	PasswordSet  bool
+	Online       bool
+	LastSeen     string
+	DeviceToken  string
 	WeekdayNames []string
 }
 
-func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration) (*App, error) {
+func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration, configuredOnlineTimeout ...time.Duration) (*App, error) {
 	if store == nil {
 		return nil, fmt.Errorf("server store is required")
 	}
@@ -66,6 +70,9 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 				"device_created": "Dispositivo criado", "device_renamed": "Dispositivo renomeado",
 				"quotas_updated": "Cotas atualizadas", "routine_saved": "Rotina salva",
 				"routine_deleted": "Rotina excluída", "local_password_changed": "Senha local alterada",
+				"device_token_issued": "Credencial do agente gerada", "bonus_added": "Tempo extra adicionado",
+				"pause_monitoring": "Vigilância pausada", "resume_monitoring": "Vigilância retomada",
+				"block_now": "Bloqueio imediato", "clear_manual_block": "Bloqueio removido",
 			}
 			if label := labels[kind]; label != "" {
 				return label
@@ -81,15 +88,23 @@ func New(store *storage.Store, secureCookies bool, sessionLifetime time.Duration
 		}
 		templates[page] = parsed
 	}
+	onlineTimeout := 60 * time.Second
+	if len(configuredOnlineTimeout) != 0 {
+		onlineTimeout = configuredOnlineTimeout[0]
+	}
+	if onlineTimeout <= 0 {
+		return nil, fmt.Errorf("online timeout must be positive")
+	}
 	app := &App{
 		store: store, sessions: newSessionStore(sessionLifetime), secureCookies: secureCookies,
-		now: time.Now, templates: templates,
+		now: time.Now, templates: templates, onlineTimeout: onlineTimeout,
 	}
 	mux := http.NewServeMux()
 	staticFS, _ := fs.Sub(assets, "static")
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/login", app.login)
 	mux.HandleFunc("/logout", app.logout)
+	mux.HandleFunc("/api/v1/device/heartbeat", app.heartbeat)
 	mux.HandleFunc("/devices", app.devices)
 	mux.HandleFunc("/devices/", app.deviceRoutes)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

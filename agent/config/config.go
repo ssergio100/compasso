@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,11 @@ type Config struct {
 	TickInterval       time.Duration
 	CheckpointInterval time.Duration
 	LoginctlPath       string
+	ServerURL          string
+	DeviceID           string
+	DeviceToken        string
+	HeartbeatInterval  time.Duration
+	HTTPTimeout        time.Duration
 }
 
 // Load reads the flat TOML subset used by the agent configuration. Keeping the
@@ -62,6 +68,11 @@ func Load(path string) (Config, error) {
 		TickInterval:       time.Second,
 		CheckpointInterval: 5 * time.Second,
 		LoginctlPath:       "/usr/bin/loginctl",
+		ServerURL:          strings.TrimRight(values["server_url"], "/"),
+		DeviceID:           values["device_id"],
+		DeviceToken:        values["device_token"],
+		HeartbeatInterval:  10 * time.Second,
+		HTTPTimeout:        8 * time.Second,
 	}
 	if value := values["tick_interval"]; value != "" {
 		config.TickInterval, err = time.ParseDuration(value)
@@ -77,6 +88,18 @@ func Load(path string) (Config, error) {
 	}
 	if value := values["loginctl_path"]; value != "" {
 		config.LoginctlPath = value
+	}
+	if value := values["heartbeat_interval"]; value != "" {
+		config.HeartbeatInterval, err = time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse heartbeat_interval: %w", err)
+		}
+	}
+	if value := values["http_timeout"]; value != "" {
+		config.HTTPTimeout, err = time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse http_timeout: %w", err)
+		}
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -101,7 +124,32 @@ func (c Config) Validate() error {
 	if c.LoginctlPath == "" {
 		return errors.New("loginctl_path cannot be empty")
 	}
+	configured := 0
+	for _, value := range []string{c.ServerURL, c.DeviceID, c.DeviceToken} {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured != 0 && configured != 3 {
+		return errors.New("server_url, device_id and device_token must be configured together")
+	}
+	if configured == 3 {
+		parsed, err := url.Parse(c.ServerURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("server_url must be an http(s) origin without credentials, query or fragment")
+		}
+	}
+	if c.HeartbeatInterval < time.Second || c.HeartbeatInterval > 10*time.Minute {
+		return errors.New("heartbeat_interval must be between 1 second and 10 minutes")
+	}
+	if c.HTTPTimeout < time.Second || c.HTTPTimeout > time.Minute {
+		return errors.New("http_timeout must be between 1 second and 1 minute")
+	}
 	return nil
+}
+
+func (c Config) SyncEnabled() bool {
+	return c.ServerURL != "" && c.DeviceID != "" && c.DeviceToken != ""
 }
 
 func stripComment(line string) string {

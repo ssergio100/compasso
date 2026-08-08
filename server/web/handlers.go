@@ -123,6 +123,9 @@ func (a *App) renderDevices(w http.ResponseWriter, r *http.Request, current sess
 		http.Error(w, "Falha ao carregar dispositivos.", http.StatusInternalServerError)
 		return
 	}
+	for index := range devices {
+		devices[index].Online = isOnline(devices[index].LastSeenAt, a.now(), a.onlineTimeout)
+	}
 	a.render(w, "devices", status, pageData{
 		Title: "Dispositivos", Login: current.Login, CSRF: current.CSRF,
 		Devices: devices, Error: message, Success: r.URL.Query().Get("success"),
@@ -141,7 +144,7 @@ func (a *App) deviceRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID := parts[0]
 	if len(parts) == 1 && r.Method == http.MethodGet {
-		a.renderDevice(w, r, current, deviceID, http.StatusOK, "")
+		a.renderDevice(w, r, current, deviceID, http.StatusOK, "", "")
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -217,6 +220,27 @@ func (a *App) handleDevicePost(w http.ResponseWriter, r *http.Request, current s
 			}
 		}
 		success = "Senha local alterada; aguardando sincronização."
+	case len(action) == 1 && action[0] == "token":
+		var token string
+		token, err = a.store.IssueDeviceToken(r.Context(), deviceID, a.now())
+		if err == nil {
+			a.renderDevice(w, r, current, deviceID, http.StatusOK, "", token)
+			return
+		}
+	case len(action) == 1 && action[0] == "control":
+		kind := r.FormValue("command")
+		err = a.store.QueueControl(r.Context(), deviceID, kind, a.now())
+		success = "Comando enviado; será aplicado no próximo heartbeat."
+	case len(action) == 1 && action[0] == "bonus":
+		var minutes int
+		minutes, err = strconv.Atoi(r.FormValue("minutes"))
+		if err == nil && (minutes <= 0 || minutes > 12*60) {
+			err = errors.New("o bônus deve ser de 1 minuto a 12 horas")
+		}
+		if err == nil {
+			err = a.store.QueueRemoteBonus(r.Context(), deviceID, a.now().Format("2006-01-02"), int64(minutes*60), a.now())
+		}
+		success = "Tempo extra enviado; será aplicado no próximo heartbeat."
 	default:
 		http.NotFound(w, r)
 		return
@@ -226,13 +250,13 @@ func (a *App) handleDevicePost(w http.ResponseWriter, r *http.Request, current s
 			http.NotFound(w, r)
 			return
 		}
-		a.renderDevice(w, r, current, deviceID, http.StatusBadRequest, err.Error())
+		a.renderDevice(w, r, current, deviceID, http.StatusBadRequest, err.Error(), "")
 		return
 	}
 	http.Redirect(w, r, "/devices/"+deviceID+"?success="+url.QueryEscape(success), http.StatusSeeOther)
 }
 
-func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current session, deviceID string, status int, message string) {
+func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current session, deviceID string, status int, message, deviceToken string) {
 	device, storedPolicy, err := a.store.LoadDevice(r.Context(), deviceID)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
@@ -292,9 +316,22 @@ func (a *App) renderDevice(w http.ResponseWriter, r *http.Request, current sessi
 		Device: device, Policy: storedPolicy, Events: events, EditRoutine: editRoutine,
 		TodayUsed: summary.UsedSeconds, TodayBonus: summary.BonusSeconds,
 		Remaining: remaining, NextBlock: nextBlock, PasswordSet: storedPolicy.LocalPasswordVerifier != "",
+		Online: isOnline(device.LastSeenAt, a.now(), a.onlineTimeout), LastSeen: formatLastSeen(device.LastSeenAt),
+		DeviceToken:  deviceToken,
 		WeekdayNames: []string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"},
 		Error:        message, Success: r.URL.Query().Get("success"),
 	})
+}
+
+func isOnline(lastSeen *time.Time, now time.Time, timeout time.Duration) bool {
+	return lastSeen != nil && !lastSeen.Before(now.Add(-timeout))
+}
+
+func formatLastSeen(lastSeen *time.Time) string {
+	if lastSeen == nil {
+		return "Nunca conectado"
+	}
+	return lastSeen.Local().Format("02/01/2006 15:04:05")
 }
 
 func parseDuration(value string) (int64, error) {
