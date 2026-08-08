@@ -7,5 +7,6 @@ Artefatos de instalação do cliente Linux.
 - `config/tempo-agent.toml`: configuração-base de instalação; o nome da conta
   controlada deve ser substituído antes de habilitar o serviço.
 
-As regras PAM, o instalador com rollback e os pacotes serão adicionados nas
-fases correspondentes.
+O gate PAM da fase 4 é instalado por `tempo-pam-setup`. Ele cria o backup
+`gdm-password.compasso.bak` antes da alteração e o utiliza na desinstalação.
+Os pacotes finais serão adicionados na fase correspondente.

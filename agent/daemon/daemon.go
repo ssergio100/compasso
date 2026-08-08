@@ -114,6 +114,11 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	if !decision.Allowed && d.lastShouldCount {
+		if err := d.tracker.Flush(ctx, now); err != nil {
+			return Status{}, fmt.Errorf("persist usage before blocking login: %w", err)
+		}
+	}
 	status := Status{
 		Decision: decision, GraphicalSession: len(graphical) != 0,
 		UsageSeconds: d.tracker.Seconds(),

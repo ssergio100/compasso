@@ -32,6 +32,28 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyReadsExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agent.db")
+	store := openTestStore(t, path)
+	if err := store.ReplacePolicy(ctx, samplePolicy(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenReadOnly(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	policy, err := store.LoadPolicy(ctx)
+	if err != nil || policy.Revision != 1 {
+		t.Fatalf("read-only policy=%+v err=%v", policy, err)
+	}
+}
+
 func TestPolicyReplacementSurvivesRestartAndRejectsStaleRevision(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agent.db")

@@ -30,3 +30,7 @@ go run ./agent/cmd/tempo-agent -config ./agent/config.toml
 O pacote `policy` contém o motor puro, `storage` mantém SQLite e checkpoints,
 `session` integra com logind e `daemon` coordena o ciclo. A unidade de produção
 está em `packaging/systemd/tempo-agent.service`.
+
+O gate contra novo login da fase 4 fica em `pamgate`. O executável
+`tempo-pam-check` é chamado pelo PAM e `tempo-pam-setup` instala ou restaura a
+regra do login gráfico. O procedimento está documentado em `docs/phase-4.md`.

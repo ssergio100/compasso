@@ -63,6 +63,37 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenReadOnly opens an existing agent database without applying migrations or
+// changing connection pragmas. It is intended for short-lived access checks in
+// the PAM login path.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("database path cannot be empty")
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+	dsnURL := url.URL{Scheme: "file", Path: absolutePath}
+	query := dsnURL.Query()
+	query.Set("mode", "ro")
+	query.Set("_busy_timeout", "3000")
+	query.Set("_foreign_keys", "on")
+	dsnURL.RawQuery = query.Encode()
+
+	db, err := sql.Open("sqlite3", dsnURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect read-only sqlite database: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
 // Close flushes SQLite's connection state and closes the database.
 func (s *Store) Close() error {
 	return s.db.Close()

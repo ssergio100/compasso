@@ -64,6 +64,10 @@ func TestQuotaExpiryTerminatesGraphicalSession(t *testing.T) {
 	if len(sessions.terminated) != 1 || sessions.terminated[0] != "3" {
 		t.Fatalf("terminated sessions = %v, want [3]", sessions.terminated)
 	}
+	durable, err := store.LoadDailyUsage(ctx, start.Format("2006-01-02"))
+	if err != nil || durable.SecondsUsed != 3 {
+		t.Fatalf("durable usage at block = %+v, err=%v", durable, err)
+	}
 
 	// The same still-closing session is not sent to logind repeatedly.
 	if _, err := daemon.Step(ctx, start.Add(4*time.Second)); err != nil {

@@ -8,6 +8,8 @@ build: build-agent
 build-agent:
 	mkdir -p bin
 	go build -o bin/tempo-agent ./agent/cmd/tempo-agent
+	go build -o bin/tempo-pam-check ./agent/cmd/tempo-pam-check
+	go build -o bin/tempo-pam-setup ./agent/cmd/tempo-pam-setup
 
 fmt:
 	gofmt -w $$(find agent server -type f -name '*.go' 2>/dev/null)
