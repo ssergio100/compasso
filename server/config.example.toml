@@ -1,0 +1,8 @@
+# Configuração de desenvolvimento do servidor.
+listen_address = "127.0.0.1:8080"
+database_path = "./var/server/tempo-server.db"
+online_timeout = "60s"
+log_level = "debug"
+
+# Somente desenvolvimento. Produção deverá usar HTTPS no reverse proxy.
+secure_cookies = false

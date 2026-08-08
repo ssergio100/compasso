@@ -567,11 +567,11 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Compilação limpa em Linux amd64.
+- [x] Compilação limpa em Linux amd64.
 
-- [ ] go test ./... sem falhas em checkout limpo.
+- [x] go test ./... sem falhas em checkout limpo.
 
-- [ ] Banco de teste cria e aplica todas as migrações do zero.
+- [x] Banco de teste cria e aplica todas as migrações do zero.
 
 ## Fase 1 — Motor de política puro
 
@@ -585,19 +585,19 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Segunda com cota 2h e consumo 90min retorna 30min restantes.
+- [x] Segunda com cota 2h e consumo 90min retorna 30min restantes.
 
-- [ ] Bônus +30min aumenta saldo, mas rotina ativa continua bloqueando.
+- [x] Bônus +30min aumenta saldo, mas rotina ativa continua bloqueando.
 
-- [ ] Rotina 22:00–08:00 bloqueia 23:30 e 07:59, libera 08:00.
+- [x] Rotina 22:00–08:00 bloqueia 23:30 e 07:59, libera 08:00.
 
-- [ ] Vigilância pausada libera mesmo com cota zero e rotina ativa e retorna contabiliza=false.
+- [x] Vigilância pausada libera mesmo com cota zero e rotina ativa e retorna contabiliza=false.
 
-- [ ] Retomar vigilância em rotina ativa retorna bloqueio imediato.
+- [x] Retomar vigilância em rotina ativa retorna bloqueio imediato.
 
-- [ ] Bloqueio manual prevalece sobre cota positiva.
+- [x] Bloqueio manual prevalece sobre cota positiva.
 
-- [ ] Matriz de todos os dias da semana, bordas exatas de horário e virada de dia.
+- [x] Matriz de todos os dias da semana, bordas exatas de horário e virada de dia.
 
 ## Fase 2 — Estado local e persistência SQLite
 

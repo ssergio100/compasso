@@ -1,0 +1,6 @@
+# Configuração de desenvolvimento do tempo-agent.
+state_dir = "./var/agent"
+database_path = "./var/agent/tempo-agent.db"
+server_url = "http://127.0.0.1:8080"
+heartbeat_interval = "10s"
+log_level = "debug"
