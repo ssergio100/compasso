@@ -1,0 +1,7 @@
+# Substitua pelo nome exato da conta comum controlada no Zorin.
+controlled_user = "usuario_controlado"
+
+database_path = "/var/lib/tempo-agent/tempo-agent.db"
+tick_interval = "1s"
+checkpoint_interval = "5s"
+loginctl_path = "/usr/bin/loginctl"

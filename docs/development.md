@@ -16,6 +16,7 @@ testes no ambiente de desenvolvimento atual.
 ```bash
 make fmt             # formata fontes Go
 make lint            # valida gofmt e executa go vet
+make build-agent     # gera bin/tempo-agent
 make test-go         # executa testes Go
 make test-migrations # cria bancos temporários a partir do zero
 make test            # executa todas as validações e compila
@@ -25,6 +26,10 @@ Os bancos e arquivos criados durante o desenvolvimento devem ficar em `var/`,
 que não é versionado. Copie os arquivos `config.example.toml` de cada componente
 para uma configuração local ignorada pelo Git quando esses serviços forem
 implementados.
+
+A integração de sessões da fase 3 usa `loginctl`, disponível nas distribuições
+com systemd. Os testes do pacote `agent/daemon` usam uma implementação simulada:
+eles nunca encerram a sessão da máquina de desenvolvimento.
 
 ## Migrações
 

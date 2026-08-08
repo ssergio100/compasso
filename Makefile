@@ -1,9 +1,13 @@
-.PHONY: all build fmt fmt-check lint test test-go test-migrations clean
+.PHONY: all build build-agent fmt fmt-check lint test test-go test-migrations clean
 
 all: test
 
-build:
+build: build-agent
 	go build ./...
+
+build-agent:
+	mkdir -p bin
+	go build -o bin/tempo-agent ./agent/cmd/tempo-agent
 
 fmt:
 	gofmt -w $$(find agent server -type f -name '*.go' 2>/dev/null)
