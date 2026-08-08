@@ -6,6 +6,7 @@
 - Go 1.26.x como versão-alvo do projeto;
 - GNU Make;
 - SQLite 3 com o executável `sqlite3` no `PATH`.
+- compilador C compatível com CGO para o driver SQLite do agente.
 
 O código do motor também permanece compatível com Go 1.18 para permitir os
 testes no ambiente de desenvolvimento atual.

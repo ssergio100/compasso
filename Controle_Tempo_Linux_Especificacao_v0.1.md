@@ -611,13 +611,13 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Reiniciar o daemon durante uso e confirmar perda máxima de poucos segundos, não minutos.
+- [x] Reiniciar o daemon durante uso e confirmar perda máxima de poucos segundos, não minutos.
 
-- [ ] Simular crash no meio de gravação e verificar banco íntegro.
+- [x] Simular crash no meio de gravação e verificar banco íntegro.
 
-- [ ] Aplicar nova revisão e confirmar que a política antiga não reaparece após reboot.
+- [x] Aplicar nova revisão e confirmar que a política antiga não reaparece após reboot.
 
-- [ ] Criar bônus offline e verificar persistência após reinício.
+- [x] Criar bônus offline e verificar persistência após reinício.
 
 ## Fase 3 — Daemon systemd e sessões Linux
 
