@@ -31,6 +31,17 @@ O pacote `policy` contém o motor puro, `storage` mantém SQLite e checkpoints,
 `session` integra com logind e `daemon` coordena o ciclo. A unidade de produção
 está em `packaging/systemd/tempo-agent.service`.
 
+## Sincronização da fase 8
+
+Quando `server_url`, `device_id` e `device_token` estão configurados, o pacote
+`syncclient` envia heartbeat, consumo e eventos pendentes. Políticas completas
+são aplicadas por revisão e comandos são confirmados de forma durável. Se os
+três valores estiverem vazios ou o servidor estiver indisponível, o daemon
+continua aplicando integralmente o estado local.
+
+Para o ensaio sem instalação no Zorin, siga `docs/phase-8.md`. Mantenha a
+vigilância pausada para não encerrar a própria sessão de desenvolvimento.
+
 O gate contra novo login da fase 4 fica em `pamgate`. O executável
 `tempo-pam-check` é chamado pelo PAM e `tempo-pam-setup` instala ou restaura a
 regra do login gráfico. O procedimento está documentado em `docs/phase-4.md`.

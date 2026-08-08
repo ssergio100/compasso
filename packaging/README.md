@@ -10,3 +10,7 @@ Artefatos de instalação do cliente Linux.
 O gate PAM da fase 4 é instalado por `tempo-pam-setup`. Ele cria o backup
 `gdm-password.compasso.bak` antes da alteração e o utiliza na desinstalação.
 Os pacotes finais serão adicionados na fase correspondente.
+
+Na fase 6, `dbus/br.com.tempo.Agent.conf` autoriza chamadas locais ao método de
+bônus e `applications/br.com.tempo.LocalBonus.desktop` adiciona o diálogo GTK ao
+menu do Zorin.

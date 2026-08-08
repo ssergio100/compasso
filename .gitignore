@@ -3,6 +3,8 @@
 /dist/
 *.out
 *.test
+__pycache__/
+*.pyc
 
 # Runtime and development state
 *.db
@@ -11,6 +13,7 @@
 *.sqlite
 *.sqlite3
 .env
+**/config.toml
 
 # Editors and operating systems
 .idea/

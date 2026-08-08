@@ -5,7 +5,10 @@ tick_interval = "1s"
 checkpoint_interval = "5s"
 loginctl_path = "/usr/bin/loginctl"
 
-# Usado a partir da fase de sincronização. Nunca é fixado no código.
-server_url = "http://127.0.0.1:8080"
+# Deixe os três valores vazios para iniciar somente em modo offline.
+server_url = ""
+device_id = ""
+device_token = ""
 heartbeat_interval = "10s"
+http_timeout = "8s"
 log_level = "debug"

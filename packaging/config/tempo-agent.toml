@@ -5,3 +5,10 @@ database_path = "/var/lib/tempo-agent/tempo-agent.db"
 tick_interval = "1s"
 checkpoint_interval = "5s"
 loginctl_path = "/usr/bin/loginctl"
+
+# Preenchidos durante o pareamento. Vazios mantêm o agente funcional offline.
+server_url = ""
+device_id = ""
+device_token = ""
+heartbeat_interval = "10s"
+http_timeout = "8s"

@@ -1,0 +1,36 @@
+{{define "content"}}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">ADMINISTRAÇÃO</p>
+    <h1>Dispositivos</h1>
+    <p class="muted">Computadores administrados pelo Compasso.</p>
+  </div>
+</div>
+
+<div class="device-grid">
+  {{range .Devices}}
+  <a class="card device-card" href="/devices/{{.ID}}">
+    {{if .Online}}<span class="status online">ONLINE</span>{{else}}<span class="status offline">OFFLINE</span>{{end}}
+    <h2>{{.Name}}</h2>
+    <p>Política revisão {{.PolicyRevision}}</p>
+    <p class="muted">Aplicada pelo cliente: revisão {{.AppliedPolicyRevision}}</p>
+  </a>
+  {{else}}
+  <div class="card empty-state">
+    <h2>Nenhum computador</h2>
+    <p>Cadastre o primeiro computador para definir suas regras.</p>
+  </div>
+  {{end}}
+</div>
+
+<section class="card compact-card">
+  <h2>Adicionar dispositivo</h2>
+  <form method="post" action="/devices" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <label>Nome
+      <input name="name" maxlength="80" placeholder="Ex.: PC do quarto" required>
+    </label>
+    <button class="primary" type="submit">Adicionar</button>
+  </form>
+</section>
+{{end}}

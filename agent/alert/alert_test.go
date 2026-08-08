@@ -26,6 +26,29 @@ func TestUpcomingAlertsRoutine(t *testing.T) {
 	}
 }
 
+func TestUpcomingAlertsQuota(t *testing.T) {
+	now := time.Date(2026, 8, 8, 18, 45, 0, 0, time.Local)
+	blockAt := time.Date(2026, 8, 8, 19, 0, 0, 0, time.Local)
+	decision := policy.Decision{Allowed: true, NextBlockAt: blockAt, NextBlockReason: policy.ReasonQuota}
+	alerts, err := UpcomingAlerts(decision, 10, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Time{
+		time.Date(2026, 8, 8, 18, 50, 0, 0, time.Local),
+		time.Date(2026, 8, 8, 18, 55, 0, 0, time.Local),
+		time.Date(2026, 8, 8, 18, 59, 0, 0, time.Local),
+	}
+	if len(alerts) != len(want) {
+		t.Fatalf("alerts=%d, want %d", len(alerts), len(want))
+	}
+	for index := range want {
+		if !alerts[index].At.Equal(want[index]) {
+			t.Fatalf("alert %d at %v, want %v", index, alerts[index].At, want[index])
+		}
+	}
+}
+
 func TestUpcomingAlertsAfterPause(t *testing.T) {
 	now := time.Date(2026, 8, 8, 21, 50, 0, 0, time.Local)
 	decision := policy.Decision{Allowed: true, Reason: policy.ReasonPaused}

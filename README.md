@@ -6,7 +6,8 @@ Linux que continua aplicando a última política válida sem conexão com o serv
 ## Componentes
 
 - `agent`: daemon privilegiado, motor de política e persistência local.
-- `server`: API, painel administrativo e persistência central.
+- `server`: painel administrativo, API de sincronização e persistência central SQLite.
+- `protocol`: contrato versionado de heartbeat compartilhado pelo servidor e agente.
 - `local-ui`: interface GTK para intervenções locais.
 - `docs`: documentação de desenvolvimento e decisões técnicas.
 - `packaging`: arquivos de instalação e empacotamento Linux.

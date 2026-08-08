@@ -1,7 +1,7 @@
 [Unit]
 Description=Compasso local time-control agent
-Wants=systemd-logind.service
-After=local-fs.target systemd-logind.service
+Wants=systemd-logind.service dbus.service
+After=local-fs.target systemd-logind.service dbus.service
 
 [Service]
 Type=simple
