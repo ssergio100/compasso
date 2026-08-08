@@ -655,15 +655,17 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Estado liberado permite login do usuário controlado.
+- [x] Estado liberado permite login do usuário controlado (helper automatizado; login real pendente no Zorin).
 
-- [ ] Estado bloqueado recusa login do usuário controlado.
+- [x] Estado bloqueado recusa login do usuário controlado (helper automatizado; login real pendente no Zorin).
 
-- [ ] Conta root/responsável não é bloqueada por engano.
+- [x] Conta root/responsável não é bloqueada por engano (teste automatizado com conta fora do controle).
 
-- [ ] Agente indisponível segue política fail-safe definida e não quebra permanentemente o PAM.
+- [x] Agente indisponível usa estado SQLite; erro de estado segue `fail-open` (teste automatizado).
 
-- [ ] Desinstalação restaura configuração PAM original.
+- [x] Desinstalação restaura configuração PAM original (teste automatizado byte a byte).
+
+- [ ] No Zorin, o GDM aplica o gate ao login real e permanece operacional após instalação e remoção.
 
 ## Fase 5 — Alertas de sessão
 
