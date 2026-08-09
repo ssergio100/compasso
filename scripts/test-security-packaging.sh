@@ -3,11 +3,6 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 systemd_unit="${project_root}/packaging/systemd/tempo-agent.service"
-installer="${project_root}/scripts/install-agent-securely.sh"
-pilot_installer="${project_root}/scripts/install-pilot-components.sh"
-pilot_uninstaller="${project_root}/scripts/uninstall-compasso.sh"
-pilot_recovery="${project_root}/scripts/recover-pilot-login.sh"
-package_builder="${project_root}/scripts/build-client-package.sh"
 agent_configuration_helper="${project_root}/agent/cmd/tempo-agent-configure/main.go"
 dockerfile="${project_root}/server/Dockerfile"
 admin_dockerfile="${project_root}/admin-ui/Dockerfile"
@@ -47,12 +42,10 @@ for required_directive in "${required_directives[@]}"; do
   require_unit_directive "${required_directive}"
 done
 
-bash -n "${installer}"
-bash -n "${pilot_installer}"
-bash -n "${pilot_uninstaller}"
-bash -n "${pilot_recovery}"
-bash -n "${project_root}/scripts/schedule-pilot-recovery.sh"
-bash -n "${package_builder}"
+bash -n "${project_root}/scripts/build-debian-package.sh"
+bash -n "${project_root}/packaging/debian/postinst"
+bash -n "${project_root}/packaging/debian/prerm"
+bash -n "${project_root}/packaging/debian/postrm"
 grep -Fq '"restart", "tempo-agent.service"' "${agent_configuration_helper}"
 grep -Fq 'waitForSuccessfulSynchronization' "${agent_configuration_helper}"
 bash -n "${project_root}/scripts/install-server.sh"
@@ -75,4 +68,4 @@ if command -v docker >/dev/null 2>&1; then
   COMPASSO_DATA_DIRECTORY=/tmp/compasso-compose-validation \
     docker compose --project-directory "${project_root}" config --quiet
 fi
-echo "hardening systemd, instaladores e pacote Docker validados"
+echo "hardening systemd e empacotamento validados"

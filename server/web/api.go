@@ -43,8 +43,16 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	response, err := a.store.ReceiveHeartbeat(r.Context(), deviceID, request, a.now())
 	if err != nil {
 		status := http.StatusBadRequest
-		if errors.Is(err, storage.ErrRevisionAhead) {
+		var revisionError *storage.RevisionAheadError
+		if errors.As(err, &revisionError) {
 			status = http.StatusConflict
+			writeJSONErrorResponse(w, status, protocol.ErrorResponse{
+				Error:          "client synchronization state is newer than this device",
+				Code:           "revision_ahead",
+				ClientRevision: revisionError.ClientRevision,
+				ServerRevision: revisionError.ServerRevision,
+			})
+			return
 		}
 		writeJSONError(w, status, "heartbeat rejected")
 		return
@@ -55,8 +63,12 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSONErrorResponse(w, status, protocol.ErrorResponse{Error: message})
+}
+
+func writeJSONErrorResponse(w http.ResponseWriter, status int, response protocol.ErrorResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(protocol.ErrorResponse{Error: message})
+	_ = json.NewEncoder(w).Encode(response)
 }

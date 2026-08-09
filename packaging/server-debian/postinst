@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+  echo "Compasso Server instalado sem iniciar contêineres."
+  echo "Revise /etc/compasso-server/compasso.env e execute:"
+  echo "  sudo /opt/compasso-server/scripts/install-server.sh"
+fi

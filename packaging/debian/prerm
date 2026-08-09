@@ -2,21 +2,7 @@
 set -e
 
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
-  pam_service_path="/etc/pam.d/gdm-password"
-  pam_backup_path="${pam_service_path}.compasso.bak"
-
-  if [ -f "${pam_backup_path}" ]; then
-    /usr/sbin/tempo-pam-setup -action uninstall
-  fi
-  if [ -f "${pam_service_path}" ] \
-    && grep -Fq "BEGIN COMPASSO PAM GATE" "${pam_service_path}"; then
-    echo "erro: a regra PAM do Compasso ainda está ativa; remoção cancelada" >&2
-    exit 1
-  fi
-
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl stop compasso-pilot-recovery.timer \
-      compasso-pilot-recovery.service 2>/dev/null || true
     systemctl disable --now tempo-agent.service 2>/dev/null || true
   fi
 elif [ "$1" = "upgrade" ] && [ -d /run/systemd/system ]; then

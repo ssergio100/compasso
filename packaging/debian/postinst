@@ -5,23 +5,35 @@ if [ "$1" != "configure" ]; then
   exit 0
 fi
 
+# The pre-package installer wrote a unit here. /etc has precedence over the
+# packaged /usr/lib unit, so leaving it behind silently runs obsolete code and
+# hardening settings after an upgrade.
+if [ -f /etc/systemd/system/tempo-agent.service ]; then
+  rm -f /etc/systemd/system/tempo-agent.service
+  echo "Unidade legada /etc/systemd/system/tempo-agent.service removida."
+fi
+
 install -d -o root -g root -m 0700 /var/lib/tempo-agent
 chmod 0600 /etc/tempo-agent/config.toml
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
-  systemctl disable --now tempo-agent.service 2>/dev/null || true
+  if [ -f /etc/tempo-agent/setup-complete ]; then
+    systemctl enable tempo-agent.service 2>/dev/null || true
+    systemctl restart tempo-agent.service
+  else
+    systemctl disable --now tempo-agent.service 2>/dev/null || true
+  fi
 fi
-
-# Every installation/upgrade requires an explicit confirmation in the graphical
-# assistant. Never infer consent from credentials left by an older package.
-rm -f /etc/tempo-agent/setup-complete
 
 if command -v busctl >/dev/null 2>&1 && [ -S /run/dbus/system_bus_socket ]; then
   busctl call org.freedesktop.DBus /org/freedesktop/DBus \
     org.freedesktop.DBus ReloadConfig || true
 fi
 
-echo "Compasso instalado, mas ainda não iniciado."
-echo "Abra Compasso — Configurar agente para revisar os dados e iniciar."
-echo "O gate PAM permanece desativado."
+if [ -f /etc/tempo-agent/setup-complete ]; then
+  echo "Compasso atualizado e cliente configurado reiniciado."
+else
+  echo "Compasso instalado, mas ainda não iniciado."
+  echo "Abra Compasso e use a engrenagem para configurar e iniciar."
+fi

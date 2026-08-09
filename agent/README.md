@@ -59,9 +59,5 @@ subtrai somente o uso monotônico posterior; heartbeats sem mudança não reapli
 saldo. O heartbeat também informa presença gráfica separadamente do estado
 online, permitindo que o painel pare o contador depois do logout.
 
-Para o ensaio sem instalação no Zorin, siga `docs/phase-8.md`. Mantenha a
-vigilância pausada para não encerrar a própria sessão de desenvolvimento.
-
-O pacote `pamgate` e seus executáveis permanecem como registro do protótipo
-anterior. Eles não devem ser ativados, pois recusar a autenticação contradiz o
-requisito atual.
+Para o ensaio sem instalação, siga `docs/phase-8.md`. Mantenha a vigilância
+pausada para não encerrar a própria sessão de desenvolvimento.

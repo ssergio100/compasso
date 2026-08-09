@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,21 +24,13 @@ const (
 )
 
 func main() {
-	checkReady := flag.Bool("check-ready", false, "check whether first-run configuration is complete")
-	flag.Parse()
-	if flag.NArg() != 0 {
+	if len(os.Args) != 1 {
 		fatal(errors.New("unexpected positional arguments"))
 	}
 
 	settings, err := config.Load(configurationPath)
 	if err != nil {
 		fatal(err)
-	}
-	if *checkReady {
-		if err := agentsetup.CheckReady(settings, lookupUID); err != nil {
-			os.Exit(1)
-		}
-		return
 	}
 	if os.Geteuid() != 0 {
 		fatal(errors.New("administrative authorization is required"))

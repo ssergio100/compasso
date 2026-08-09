@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-agent-portable build-server admin-ui-dev package-client package-client-tar package-deb package-server test-deb test-server-package fmt fmt-check lint test test-go test-ui test-admin-ui test-migrations test-security clean
+.PHONY: all build build-agent build-agent-portable build-server admin-ui-dev package-client package-deb package-server package-all test-deb test-server-package fmt fmt-check lint test test-go test-ui test-admin-ui test-migrations test-security clean
 
 all: test
 
@@ -10,8 +10,6 @@ build-agent:
 	go build -o bin/tempo-agent ./agent/cmd/tempo-agent
 	go build -o bin/tempo-agent-configure ./agent/cmd/tempo-agent-configure
 	go build -o bin/compasso-session-logout ./agent/cmd/compasso-session-logout
-	go build -o bin/tempo-pam-check ./agent/cmd/tempo-pam-check
-	go build -o bin/tempo-pam-setup ./agent/cmd/tempo-pam-setup
 
 build-agent-portable:
 	./scripts/build-portable-client-binaries.sh
@@ -25,14 +23,14 @@ admin-ui-dev:
 
 package-client: package-deb
 
-package-client-tar: build-agent-portable
-	./scripts/build-client-package.sh
-
 package-deb: build-agent-portable
 	./scripts/build-debian-package.sh
 
 package-server:
 	./scripts/build-server-package.sh
+
+package-all:
+	./scripts/build-all-debian-packages.sh
 
 test-deb: package-deb
 	./scripts/test-debian-package.sh

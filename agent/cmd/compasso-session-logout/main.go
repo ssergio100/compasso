@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"time"
@@ -13,9 +12,7 @@ import (
 const operationTimeout = 10 * time.Second
 
 func main() {
-	probeOnly := flag.Bool("probe", false, "detect an orderly logout provider without logging out")
-	flag.Parse()
-	if flag.NArg() != 0 {
+	if len(os.Args) != 1 {
 		fatal(fmt.Errorf("unexpected positional arguments"))
 	}
 
@@ -27,12 +24,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
 
-	var provider string
-	if *probeOnly {
-		provider, err = sessionlogout.Detect(ctx, connection)
-	} else {
-		provider, err = sessionlogout.Request(ctx, connection)
-	}
+	provider, err := sessionlogout.Request(ctx, connection)
 	if err != nil {
 		fatal(err)
 	}

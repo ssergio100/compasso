@@ -1,11 +1,11 @@
 Package: compasso-client
-Version: 0.1.0~pilot12
+Version: 0.1.0~pilot19
 Architecture: amd64
 Maintainer: Compasso <compasso@smresume.com>
 Section: admin
 Priority: optional
 Installed-Size: 17000
-Depends: libc6 (>= 2.34), systemd, dbus, libpam-runtime, ca-certificates, python3, python3-gi, gir1.2-gtk-4.0, libnotify-bin, pkexec
+Depends: libc6 (>= 2.34), systemd, dbus, ca-certificates, python3, python3-gi, gir1.2-gtk-4.0, libnotify-bin, pkexec
 Description: cliente Linux do controle de tempo Compasso
  Agente nativo para aplicar cotas e rotinas mesmo sem conexão com o servidor,
  acompanhado das interfaces de configuração inicial e concessão de tempo.

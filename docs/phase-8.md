@@ -54,7 +54,8 @@ mantenha a vigilância pausada durante todo o ensaio.
 
    ```bash
    cd /home/sergio/projetos/compasso
-   ./scripts/configure-phase8-test.sh
+   cp agent/config.example.toml agent/config.toml
+   # Edite agent/config.toml e informe server_url, device_id e device_token.
    go run ./agent/cmd/tempo-agent -config agent/config.toml
    ```
 

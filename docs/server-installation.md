@@ -1,19 +1,21 @@
 # Compasso Server — instalação no Debian 13
 
-Este pacote instala a API e a interface administrativa em dois contêineres
+O pacote Debian instala a API e a interface administrativa em dois contêineres
 independentes, administrados pelo mesmo Docker Compose. Ele não instala nem
 configura túnel, proxy reverso, VPN, DNS, certificado ou firewall.
 
 ## Instalação
 
-Copie o `.tar.gz` para o servidor. O arquivo já contém o diretório `compasso/`;
-extraia-o onde preferir e execute um único instalador. No Dell, a organização
-escolhida foi:
+Copie o `.deb` para o servidor e instale-o:
 
 ```bash
-tar -xzf compasso-server-0.1.0-pilot4.tar.gz -C /srv/docker/compose
-cd /srv/docker/compose/compasso
-sudo ./scripts/install-server.sh
+sudo apt install ./compasso-server_<versão>_all.deb
+```
+
+Revise `/etc/compasso-server/compasso.env` e execute:
+
+```bash
+sudo /opt/compasso-server/scripts/install-server.sh
 ```
 
 O instalador:
@@ -42,10 +44,10 @@ primeiro acesso. Faça essa etapa antes de publicar o servidor na Internet.
 ## Operação
 
 ```bash
-sudo ./scripts/status-server.sh
-sudo ./scripts/backup-server.sh
-sudo ./scripts/update-server.sh
-sudo ./scripts/restore-server-backup.sh /srv/docker/backups/compasso/compasso-server-DATA.tar.gz
+sudo /opt/compasso-server/scripts/status-server.sh
+sudo /opt/compasso-server/scripts/backup-server.sh
+sudo /opt/compasso-server/scripts/update-server.sh
+sudo /opt/compasso-server/scripts/restore-server-backup.sh /srv/docker/backups/compasso/compasso-server-DATA.tar.gz
 ```
 
 Uma atualização preserva `.env` e o banco externo ao diretório do pacote. A

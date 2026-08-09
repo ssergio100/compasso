@@ -11,7 +11,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-var ErrNoSupportedProvider = errors.New("no supported session logout provider is available")
+var errNoSupportedProvider = errors.New("no supported session logout provider is available")
 
 type logoutProvider struct {
 	Name       string
@@ -52,16 +52,6 @@ func Connect() (*dbus.Conn, error) {
 	return connection, nil
 }
 
-// Detect reports the first available orderly logout provider without invoking
-// it. Provider discovery is capability-based and does not inspect desktop or
-// window-manager names.
-func Detect(ctx context.Context, connection *dbus.Conn) (string, error) {
-	if connection == nil {
-		return "", errors.New("session bus connection is required")
-	}
-	return detect(ctx, dbusSessionBus{connection: connection})
-}
-
 // Request asks an available session manager to perform its normal logout.
 // Unsupported sessions fail safely and remain open.
 func Request(ctx context.Context, connection *dbus.Conn) (string, error) {
@@ -69,24 +59,6 @@ func Request(ctx context.Context, connection *dbus.Conn) (string, error) {
 		return "", errors.New("session bus connection is required")
 	}
 	return request(ctx, dbusSessionBus{connection: connection})
-}
-
-func detect(ctx context.Context, bus sessionBus) (string, error) {
-	var failures []string
-	for _, provider := range orderlyLogoutProviders {
-		available, err := bus.NameAvailable(ctx, provider.BusName)
-		if err != nil {
-			failures = append(failures, provider.Name+": "+err.Error())
-			continue
-		}
-		if available {
-			return provider.Name, nil
-		}
-	}
-	if len(failures) != 0 {
-		return "", fmt.Errorf("%w: %s", ErrNoSupportedProvider, strings.Join(failures, "; "))
-	}
-	return "", ErrNoSupportedProvider
 }
 
 func request(ctx context.Context, bus sessionBus) (string, error) {
@@ -107,9 +79,9 @@ func request(ctx context.Context, bus sessionBus) (string, error) {
 		return provider.Name, nil
 	}
 	if len(failures) != 0 {
-		return "", fmt.Errorf("%w: %s", ErrNoSupportedProvider, strings.Join(failures, "; "))
+		return "", fmt.Errorf("%w: %s", errNoSupportedProvider, strings.Join(failures, "; "))
 	}
-	return "", ErrNoSupportedProvider
+	return "", errNoSupportedProvider
 }
 
 func (b dbusSessionBus) NameAvailable(ctx context.Context, name string) (bool, error) {

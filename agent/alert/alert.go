@@ -28,26 +28,6 @@ type Notifier interface {
 	Notify(context.Context, Alert) error
 }
 
-// UpcomingAlerts returns the remaining pre-block alerts for the current decision.
-// It returns an empty slice when the monitoring state does not produce a future block,
-// when warningMinutes is negative, or when the next block is already active.
-func UpcomingAlerts(decision policy.Decision, warningMinutes int, now time.Time) ([]Alert, error) {
-	if warningMinutes < 0 {
-		return nil, fmt.Errorf("warning minutes cannot be negative")
-	}
-	if now.IsZero() {
-		return nil, fmt.Errorf("now must be set")
-	}
-	plannedAlerts := plannedAlerts(decision, warningMinutes)
-	upcomingAlerts := make([]Alert, 0, len(plannedAlerts))
-	for _, plannedAlert := range plannedAlerts {
-		if plannedAlert.At.After(now) {
-			upcomingAlerts = append(upcomingAlerts, plannedAlert)
-		}
-	}
-	return upcomingAlerts, nil
-}
-
 // DueAlerts returns notification thresholds crossed since the previous daemon
 // cycle. A zero previousCycle means startup and deliberately emits nothing.
 func DueAlerts(decision policy.Decision, warningMinutes int, previousCycle, now time.Time) ([]Alert, error) {

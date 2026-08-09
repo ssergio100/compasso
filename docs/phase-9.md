@@ -65,21 +65,22 @@ remota em **Pausar vigilância** para impedir logout acidental.
 2. Reinicie o servidor com o código atual e mantenha a vigilância pausada.
 3. No painel, revogue o token antigo e gere uma credencial nova. Não copie esse
    novo token para `agent/config.toml`.
-4. Compile como usuário comum:
+4. Gere o pacote como usuário comum:
 
    ```bash
    cd /home/sergio/projetos/compasso
-   make build-agent
+   make package-client
    ```
 
-5. Execute o instalador e informe usuário, URL local, `device_id` e o novo token:
+5. Instale o pacote e abra **Compasso** para informar usuário, URL, `device_id`
+   e o novo token pela engrenagem:
 
    ```bash
-   sudo ./scripts/install-agent-securely.sh
+   sudo apt install ./dist/compasso-client_0.1.0~pilot19_amd64.deb
    ```
 
-   O instalador valida a configuração, inicia o serviço, confirma que ele ficou
-   ativo e verifica silenciosamente que o token não apareceu no journal.
+   O assistente valida a configuração e só confirma o pareamento depois do
+   primeiro heartbeat aceito.
 
 6. Como usuário comum, valide as permissões:
 

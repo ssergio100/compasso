@@ -41,6 +41,24 @@ func TestLoadRequiresControlledUser(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownAndDuplicateKeys(t *testing.T) {
+	for name, extra := range map[string]string{
+		"unknown":   `log_level = "debug"`,
+		"duplicate": `controlled_user = "other"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agent.toml")
+			contents := "database_path = \"/tmp/agent.db\"\ncontrolled_user = \"child\"\n" + extra
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("configuration accepted %s key", name)
+			}
+		})
+	}
+}
+
 func TestValidateRequiresHTTPSForRemoteSynchronization(t *testing.T) {
 	configuration := Config{
 		DatabasePath: "/var/lib/tempo-agent/agent.db", ControlledUser: "child",

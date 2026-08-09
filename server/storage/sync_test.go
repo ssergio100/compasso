@@ -80,6 +80,28 @@ func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestRevisionAheadErrorCarriesBothRevisions(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "New enrollment", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 9,
+		LocalDate:      "2026-08-10",
+	}, now.Add(time.Second))
+	var revisionError *RevisionAheadError
+	if !errors.As(err, &revisionError) {
+		t.Fatalf("revision conflict error=%v", err)
+	}
+	if revisionError.ClientRevision != 9 || revisionError.ServerRevision != 1 {
+		t.Fatalf("revision conflict=%+v", revisionError)
+	}
+}
+
 func TestCommandsRemainPendingUntilAcknowledged(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

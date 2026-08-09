@@ -24,18 +24,18 @@ Os testes são divididos em etapas. Não avance para logout antes de validar
 interface, alerta e recuperação. Mantenha **Pausar vigilância** ativo enquanto
 instala ou atualiza componentes.
 
-### 1. Instalar os componentes sem PAM
+### 1. Instalar o cliente
 
 - [x] Componentes piloto instalados no Zorin e `tempo-agent.service` confirmado como ativo.
 
 ```bash
 cd /home/sergio/projetos/compasso
-make build-agent
-sudo ./scripts/install-pilot-components.sh
+make package-client
+sudo apt install ./dist/compasso-client_0.1.0~pilot19_amd64.deb
 ```
 
-Esse passo atualiza o serviço já instalado, instala o diálogo GTK e os comandos
-de recuperação. Ele não modifica `/etc/pam.d/gdm-password`.
+Esse passo instala o serviço e a interface GTK sem modificar PAM. Uma instalação
+nova permanece parada até o pareamento pelo aplicativo **Compasso**.
 
 ### 2. Validar interface e alerta sem risco de bloqueio de login
 

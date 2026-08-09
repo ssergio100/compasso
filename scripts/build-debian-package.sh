@@ -14,21 +14,16 @@ required_sources=(
   "${project_root}/bin/tempo-agent"
   "${project_root}/bin/tempo-agent-configure"
   "${project_root}/bin/compasso-session-logout"
-  "${project_root}/bin/tempo-pam-check"
-  "${project_root}/bin/tempo-pam-setup"
   "${project_root}/local-ui/bonus_dialog.py"
   "${project_root}/local-ui/configure_agent.py"
-  "${project_root}/packaging/applications/br.com.compasso.AgentSetup.desktop"
-  "${project_root}/packaging/applications/br.com.tempo.LocalBonus.desktop"
+  "${project_root}/packaging/applications/br.com.compasso.Compasso.desktop"
   "${project_root}/packaging/autostart/br.com.compasso.AgentSetup.desktop"
   "${project_root}/packaging/config/tempo-agent.toml"
   "${project_root}/packaging/dbus/br.com.tempo.Agent.conf"
-  "${project_root}/packaging/metainfo/br.com.tempo.LocalBonus.metainfo.xml"
-  "${project_root}/packaging/metainfo/br.com.compasso.AgentSetup.metainfo.xml"
+  "${project_root}/packaging/metainfo/br.com.compasso.Compasso.metainfo.xml"
   "${project_root}/packaging/polkit/br.com.compasso.AgentSetup.policy"
   "${project_root}/packaging/systemd/tempo-agent.service"
-  "${project_root}/scripts/recover-pilot-login.sh"
-  "${project_root}/scripts/schedule-pilot-recovery.sh"
+  "${project_root}/docs/client-installation.md"
 )
 for required_source in "${required_sources[@]}"; do
   if [[ ! -f "${required_source}" ]]; then
@@ -37,7 +32,7 @@ for required_source in "${required_sources[@]}"; do
   fi
 done
 
-binary_names=(tempo-agent tempo-agent-configure compasso-session-logout tempo-pam-check tempo-pam-setup)
+binary_names=(tempo-agent tempo-agent-configure compasso-session-logout)
 for binary_name in "${binary_names[@]}"; do
   if ldd "${project_root}/bin/${binary_name}" | grep -Fq "libgo"; then
     echo "erro: ${binary_name} depende de libgo; use make build-agent-portable" >&2
@@ -89,18 +84,11 @@ install -m 0600 \
 install -m 0755 "${project_root}/bin/tempo-agent" "${package_root}/usr/sbin/tempo-agent"
 install -m 0755 "${project_root}/bin/tempo-agent-configure" "${package_root}/usr/sbin/tempo-agent-configure"
 install -m 0755 "${project_root}/bin/compasso-session-logout" "${package_root}/usr/libexec/compasso-session-logout"
-install -m 0755 "${project_root}/bin/tempo-pam-check" "${package_root}/usr/libexec/tempo-pam-check"
-install -m 0755 "${project_root}/bin/tempo-pam-setup" "${package_root}/usr/sbin/tempo-pam-setup"
 install -m 0755 "${project_root}/local-ui/bonus_dialog.py" "${package_root}/usr/bin/tempo-local-bonus"
 install -m 0755 "${project_root}/local-ui/configure_agent.py" "${package_root}/usr/bin/compasso-agent-setup"
-install -m 0755 "${project_root}/scripts/recover-pilot-login.sh" "${package_root}/usr/sbin/tempo-pilot-recover"
-install -m 0755 "${project_root}/scripts/schedule-pilot-recovery.sh" "${package_root}/usr/sbin/tempo-schedule-recovery"
 install -m 0644 \
-  "${project_root}/packaging/applications/br.com.compasso.AgentSetup.desktop" \
-  "${package_root}/usr/share/applications/br.com.compasso.AgentSetup.desktop"
-install -m 0644 \
-  "${project_root}/packaging/applications/br.com.tempo.LocalBonus.desktop" \
-  "${package_root}/usr/share/applications/br.com.tempo.LocalBonus.desktop"
+  "${project_root}/packaging/applications/br.com.compasso.Compasso.desktop" \
+  "${package_root}/usr/share/applications/br.com.compasso.Compasso.desktop"
 install -m 0644 \
   "${project_root}/packaging/autostart/br.com.compasso.AgentSetup.desktop" \
   "${package_root}/etc/xdg/autostart/br.com.compasso.AgentSetup.desktop"
@@ -108,11 +96,8 @@ install -m 0644 \
   "${project_root}/packaging/dbus/br.com.tempo.Agent.conf" \
   "${package_root}/usr/share/dbus-1/system.d/br.com.tempo.Agent.conf"
 install -m 0644 \
-  "${project_root}/packaging/metainfo/br.com.compasso.AgentSetup.metainfo.xml" \
-  "${package_root}/usr/share/metainfo/br.com.compasso.AgentSetup.metainfo.xml"
-install -m 0644 \
-  "${project_root}/packaging/metainfo/br.com.tempo.LocalBonus.metainfo.xml" \
-  "${package_root}/usr/share/metainfo/br.com.tempo.LocalBonus.metainfo.xml"
+  "${project_root}/packaging/metainfo/br.com.compasso.Compasso.metainfo.xml" \
+  "${package_root}/usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml"
 install -m 0644 \
   "${project_root}/packaging/polkit/br.com.compasso.AgentSetup.policy" \
   "${package_root}/usr/share/polkit-1/actions/br.com.compasso.AgentSetup.policy"
@@ -120,7 +105,7 @@ install -m 0644 \
   "${project_root}/packaging/systemd/tempo-agent.service" \
   "${package_root}/usr/lib/systemd/system/tempo-agent.service"
 install -m 0644 \
-  "${project_root}/docs/portable-client-plan.md" \
+  "${project_root}/docs/client-installation.md" \
   "${package_root}/usr/share/doc/compasso-client/README.md"
 
 install -d "${project_root}/dist"

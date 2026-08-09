@@ -1,0 +1,10 @@
+Package: compasso-server
+Version: @VERSION@
+Architecture: all
+Maintainer: Compasso <compasso@smresume.com>
+Section: admin
+Priority: optional
+Depends: bash, ca-certificates
+Description: servidor do controle de tempo Compasso
+ API, painel administrativo, Docker Compose e ferramentas de operação do
+ servidor Compasso. Docker é validado pelo instalador antes da implantação.

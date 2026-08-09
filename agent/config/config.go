@@ -39,6 +39,12 @@ func Load(path string) (Config, error) {
 	defer file.Close()
 
 	values := make(map[string]string)
+	allowedKeys := map[string]bool{
+		"database_path": true, "controlled_user": true, "tick_interval": true,
+		"checkpoint_interval": true, "loginctl_path": true, "server_url": true,
+		"device_id": true, "device_token": true, "heartbeat_interval": true,
+		"http_timeout": true,
+	}
 	scanner := bufio.NewScanner(file)
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(stripComment(scanner.Text()))
@@ -53,6 +59,12 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("configuration line %d: expected key = value", lineNumber)
 		}
 		key = strings.TrimSpace(key)
+		if !allowedKeys[key] {
+			return Config{}, fmt.Errorf("configuration line %d: unknown key %q", lineNumber, key)
+		}
+		if _, duplicate := values[key]; duplicate {
+			return Config{}, fmt.Errorf("configuration line %d: duplicate key %q", lineNumber, key)
+		}
 		value, err := strconv.Unquote(strings.TrimSpace(rawValue))
 		if err != nil {
 			return Config{}, fmt.Errorf("configuration line %d: value must be a quoted string: %w", lineNumber, err)

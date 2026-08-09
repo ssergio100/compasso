@@ -22,6 +22,20 @@ var (
 	ErrRevisionAhead            = errors.New("client policy revision is ahead of server")
 )
 
+// RevisionAheadError identifies stale state from another server/device
+// enrollment without exposing credentials. Callers can present both revisions
+// instead of reducing this condition to an opaque HTTP conflict.
+type RevisionAheadError struct {
+	ClientRevision int64
+	ServerRevision int64
+}
+
+func (e *RevisionAheadError) Error() string {
+	return fmt.Sprintf("%s: client=%d server=%d", ErrRevisionAhead, e.ClientRevision, e.ServerRevision)
+}
+
+func (e *RevisionAheadError) Is(target error) bool { return target == ErrRevisionAhead }
+
 // IssueDeviceToken replaces a device credential and returns the secret once.
 // Only its SHA-256 digest is persisted; the token has 256 bits of entropy.
 func (s *Store) IssueDeviceToken(ctx context.Context, deviceID string, now time.Time) (string, error) {
@@ -132,7 +146,14 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		return protocol.HeartbeatResponse{}, err
 	}
 	if request.PolicyRevision > serverRevision || request.SessionStateRevision > serverRevision {
-		return protocol.HeartbeatResponse{}, fmt.Errorf("%w: client=%d server=%d", ErrRevisionAhead, request.PolicyRevision, serverRevision)
+		clientRevision := request.PolicyRevision
+		if request.SessionStateRevision > clientRevision {
+			clientRevision = request.SessionStateRevision
+		}
+		return protocol.HeartbeatResponse{}, &RevisionAheadError{
+			ClientRevision: clientRevision,
+			ServerRevision: serverRevision,
+		}
 	}
 	stamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `

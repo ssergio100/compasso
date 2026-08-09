@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """GTK 4 dialog for granting local Compasso bonus time."""
 
+import os
+import subprocess
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -11,6 +14,8 @@ BUS_NAME = "br.com.tempo.Agent"
 OBJECT_PATH = "/br/com/tempo/Agent"
 INTERFACE_NAME = "br.com.tempo.Agent"
 BONUS_OPTIONS = (15, 30, 60, 120)
+SETUP_APPLICATION_PATH = "/usr/bin/compasso-agent-setup"
+SETUP_MARKER_PATH = "/etc/tempo-agent/setup-complete"
 
 
 def seconds_for_index(index):
@@ -19,8 +24,38 @@ def seconds_for_index(index):
     return BONUS_OPTIONS[index] * 60
 
 
+def open_settings(process_launcher=subprocess.Popen):
+    """Open the advanced configuration without turning it into a second app."""
+    try:
+        process_launcher([SETUP_APPLICATION_PATH], start_new_session=True)
+    except OSError:
+        return False
+    return True
+
+
+def unavailable_service_message(setup_complete):
+    if not setup_complete:
+        return (
+            "O Compasso ainda não foi configurado. "
+            "Clique na engrenagem para configurar e ativar o serviço."
+        )
+    return (
+        "O serviço Compasso está indisponível. "
+        "Abra a engrenagem para revisar a configuração."
+    )
+
+
 def friendly_error(error):
     remote_name = Gio.DBusError.get_remote_error(error) or ""
+    return friendly_error_name(remote_name)
+
+
+def friendly_error_name(remote_name):
+    if remote_name.endswith("PasswordNotConfigured"):
+        return (
+            "Nenhuma senha de administrador foi cadastrada para este dispositivo. "
+            "Cadastre uma senha no painel do Compasso."
+        )
     if remote_name.endswith("InvalidPassword"):
         return "Senha incorreta."
     if remote_name.endswith("RateLimited"):
@@ -75,6 +110,16 @@ class BonusWindow(Gtk.ApplicationWindow):
         self.status.set_halign(Gtk.Align.START)
         content.append(self.status)
 
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        footer.set_hexpand(True)
+        settings = Gtk.Button.new_from_icon_name("preferences-system-symbolic")
+        settings.set_tooltip_text("Configurações do Compasso")
+        settings.set_hexpand(True)
+        settings.set_halign(Gtk.Align.END)
+        settings.connect("clicked", self._open_settings)
+        footer.append(settings)
+        content.append(footer)
+
         try:
             self.proxy = Gio.DBusProxy.new_for_bus_sync(
                 Gio.BusType.SYSTEM,
@@ -87,11 +132,19 @@ class BonusWindow(Gtk.ApplicationWindow):
             )
             if self.proxy.get_name_owner() is None:
                 self.proxy = None
-                self.status.set_text("O serviço Compasso não está disponível.")
+                self.status.set_text(
+                    unavailable_service_message(os.path.exists(SETUP_MARKER_PATH))
+                )
                 self.submit.set_sensitive(False)
         except GLib.Error:
-            self.status.set_text("O serviço Compasso não está disponível.")
+            self.status.set_text(
+                unavailable_service_message(os.path.exists(SETUP_MARKER_PATH))
+            )
             self.submit.set_sensitive(False)
+
+    def _open_settings(self, _button):
+        if not open_settings():
+            self.status.set_text("Não foi possível abrir as configurações do Compasso.")
 
     def _submit(self, _widget):
         if self.proxy is None or not self.submit.get_sensitive():

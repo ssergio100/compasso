@@ -29,12 +29,25 @@ if dpkg-deb --field "${package_path}" Depends | grep -Eqi '(^|[, ])docker([, ]|$
   echo "erro: o cliente não pode depender de Docker" >&2
   exit 1
 fi
+if dpkg-deb --field "${package_path}" Depends | grep -Eq '(^|, )libpam-runtime([, ]|$)'; then
+  echo "erro: o cliente não usa PAM e não deve depender de libpam-runtime" >&2
+  exit 1
+fi
 if ! dpkg-deb --field "${package_path}" Depends | grep -Eq '(^|, )pkexec([, ]|$)'; then
   echo "erro: o pacote não declara o helper de autorização gráfica pkexec" >&2
   exit 1
 fi
 if dpkg-deb --contents "${package_path}" | grep -Eqi 'dockerfile|docker-compose|compose[.]ya?ml'; then
   echo "erro: o pacote contém configuração de contêiner" >&2
+  exit 1
+fi
+if dpkg-deb --contents "${package_path}" | grep -Fq 'br.com.tempo.LocalBonus.desktop'; then
+  echo "erro: o pacote publica um segundo ícone para uma ação interna do Compasso" >&2
+  exit 1
+fi
+if dpkg-deb --contents "${package_path}" | grep -Eq \
+  'tempo-pam|pamgate|tempo-pilot|schedule-recovery'; then
+  echo "erro: o pacote contém componentes mortos do protótipo PAM/piloto" >&2
   exit 1
 fi
 
@@ -44,23 +57,29 @@ dpkg-deb --control "${package_path}" "${temporary_directory}/control"
 for maintainer_script in postinst prerm postrm; do
   sh -n "${temporary_directory}/control/${maintainer_script}"
 done
-if grep -Eq 'systemctl (enable|restart).*tempo-agent' \
-  "${temporary_directory}/control/postinst"; then
-  echo "erro: postinst inicia o agente sem confirmação gráfica" >&2
-  exit 1
-fi
-if grep -Fq -- '--check-ready' "${temporary_directory}/control/postinst"; then
-  echo "erro: postinst reutiliza credenciais antigas como confirmação" >&2
-  exit 1
-fi
 if ! grep -Fq 'systemctl disable --now tempo-agent.service' \
   "${temporary_directory}/control/postinst"; then
-  echo "erro: postinst não mantém o agente parado antes da configuração" >&2
+	  echo "erro: postinst não mantém uma instalação nova parada" >&2
   exit 1
 fi
-if ! grep -Fq 'rm -f /etc/tempo-agent/setup-complete' \
+if ! grep -Fq 'if [ -f /etc/tempo-agent/setup-complete ]' \
   "${temporary_directory}/control/postinst"; then
-  echo "erro: postinst não exige uma nova confirmação gráfica" >&2
+	  echo "erro: postinst não distingue instalação nova de cliente configurado" >&2
+	  exit 1
+fi
+if grep -Fq 'rm -f /etc/tempo-agent/setup-complete' \
+  "${temporary_directory}/control/postinst"; then
+	  echo "erro: postinst apaga a confirmação durante atualização" >&2
+	  exit 1
+fi
+if ! grep -Fq 'systemctl restart tempo-agent.service' \
+  "${temporary_directory}/control/postinst"; then
+	  echo "erro: postinst não reinicia o cliente configurado após atualização" >&2
+  exit 1
+fi
+if ! grep -Fq 'rm -f /etc/systemd/system/tempo-agent.service' \
+  "${temporary_directory}/control/postinst"; then
+  echo "erro: postinst não remove a unidade legada que sombreia o pacote" >&2
   exit 1
 fi
 
@@ -68,8 +87,6 @@ binary_paths=(
   usr/sbin/tempo-agent
   usr/sbin/tempo-agent-configure
   usr/libexec/compasso-session-logout
-  usr/libexec/tempo-pam-check
-  usr/sbin/tempo-pam-setup
 )
 for relative_binary_path in "${binary_paths[@]}"; do
   binary_path="${temporary_directory}/root/${relative_binary_path}"
@@ -89,10 +106,10 @@ done
 
 required_package_paths=(
   usr/bin/compasso-agent-setup
-  usr/share/applications/br.com.compasso.AgentSetup.desktop
+  usr/share/applications/br.com.compasso.Compasso.desktop
   etc/xdg/autostart/br.com.compasso.AgentSetup.desktop
   usr/share/polkit-1/actions/br.com.compasso.AgentSetup.policy
-  usr/share/metainfo/br.com.compasso.AgentSetup.metainfo.xml
+  usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml
 )
 for required_package_path in "${required_package_paths[@]}"; do
   if [[ ! -f "${temporary_directory}/root/${required_package_path}" ]]; then
@@ -109,9 +126,7 @@ fi
 
 if command -v appstreamcli >/dev/null 2>&1; then
   appstreamcli validate --no-net \
-    "${temporary_directory}/root/usr/share/metainfo/br.com.tempo.LocalBonus.metainfo.xml"
-  appstreamcli validate --no-net \
-    "${temporary_directory}/root/usr/share/metainfo/br.com.compasso.AgentSetup.metainfo.xml"
+    "${temporary_directory}/root/usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml"
 fi
 
 "${temporary_directory}/root/usr/sbin/tempo-agent" \

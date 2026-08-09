@@ -11,9 +11,7 @@ COPY protocol ./protocol
 RUN mkdir -p /out \
     && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/tempo-agent ./agent/cmd/tempo-agent \
     && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/tempo-agent-configure ./agent/cmd/tempo-agent-configure \
-    && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/compasso-session-logout ./agent/cmd/compasso-session-logout \
-    && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/tempo-pam-check ./agent/cmd/tempo-pam-check \
-    && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/tempo-pam-setup ./agent/cmd/tempo-pam-setup
+    && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/compasso-session-logout ./agent/cmd/compasso-session-logout
 
 FROM scratch AS exported-binaries
 

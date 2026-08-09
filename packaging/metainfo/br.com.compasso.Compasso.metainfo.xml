@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>br.com.compasso.Compasso</id>
+  <name>Compasso</name>
+  <summary>Adicionar tempo e administrar a conexão do cliente</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <developer id="smresume.com">
+    <name>Compasso</name>
+  </developer>
+  <description>
+    <p>
+      Interface do cliente Compasso para adicionar tempo de uso. As configurações
+      avançadas de conta, servidor e credenciais ficam acessíveis pelo botão de
+      engrenagem da mesma janela.
+    </p>
+  </description>
+  <launchable type="desktop-id">br.com.compasso.Compasso.desktop</launchable>
+  <url type="homepage">https://compasso.smresume.com</url>
+  <provides>
+    <binary>tempo-local-bonus</binary>
+    <binary>compasso-agent-setup</binary>
+  </provides>
+  <categories>
+    <category>Settings</category>
+    <category>System</category>
+  </categories>
+  <releases>
+    <release version="0.1.0~pilot19" date="2026-08-09"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

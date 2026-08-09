@@ -37,21 +37,6 @@ type PendingEvent struct {
 	RetryCount  int
 }
 
-// EnqueueEvent durably adds a generic idempotent event for a future heartbeat.
-func (s *Store) EnqueueEvent(ctx context.Context, event PendingEvent) error {
-	if err := validateEvent(event); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO pending_event(uuid, kind, payload_json, created_at, retry_count)
-		VALUES (?, ?, ?, ?, ?)`,
-		event.UUID, event.Kind, event.PayloadJSON, formatTime(event.CreatedAt), event.RetryCount,
-	); err != nil {
-		return fmt.Errorf("enqueue pending event: %w", err)
-	}
-	return nil
-}
-
 // CheckpointUsage saves an absolute consumed-seconds value. Values are
 // monotonic for a given day so an old checkpoint cannot return time to a user.
 func (s *Store) CheckpointUsage(ctx context.Context, usage DailyUsage) error {

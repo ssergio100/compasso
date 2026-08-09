@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrInvalidPassword = errors.New("invalid local password")
-	ErrRateLimited     = errors.New("too many password attempts")
+	ErrPasswordNotConfigured = errors.New("local password is not configured")
+	ErrInvalidPassword       = errors.New("invalid local password")
+	ErrRateLimited           = errors.New("too many password attempts")
 )
 
 // GrantResult identifies the durable bonus created by one successful request.
@@ -60,7 +61,7 @@ func (s *Service) Grant(ctx context.Context, password string, seconds int64, now
 		return GrantResult{}, fmt.Errorf("load local password verifier: %w", err)
 	}
 	if policy.LocalPasswordVerifier == "" {
-		return GrantResult{}, errors.New("local password is not configured")
+		return GrantResult{}, ErrPasswordNotConfigured
 	}
 	valid, err := VerifyPassword(password, policy.LocalPasswordVerifier)
 	if err != nil {
@@ -101,12 +102,6 @@ func (s *Service) Grant(ctx context.Context, password string, seconds int64, now
 		return GrantResult{}, fmt.Errorf("read total local bonus: %w", err)
 	}
 	return GrantResult{UUID: uuid, BonusSeconds: seconds, TotalSeconds: total}, nil
-}
-
-func (s *Service) FailedAttempts() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.failed
 }
 
 func backoffForFailure(failures int) time.Duration {

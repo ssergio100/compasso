@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sergio/compasso/agent/storage"
@@ -27,15 +26,14 @@ type Config struct {
 }
 
 type Client struct {
-	store                    *storage.Store
-	http                     *http.Client
-	config                   Config
-	now                      func() time.Time
-	successfulHeartbeatCount uint64
-	graphicalSessionMu       sync.RWMutex
-	graphicalSessionActive   bool
-	graphicalSessionID       string
-	statusReporter           func(error)
+	store                  *storage.Store
+	http                   *http.Client
+	config                 Config
+	now                    func() time.Time
+	graphicalSessionMu     sync.RWMutex
+	graphicalSessionActive bool
+	graphicalSessionID     string
+	statusReporter         func(error)
 }
 
 // SetStatusReporter registers a process-local observer for synchronization
@@ -59,13 +57,6 @@ func New(store *storage.Store, httpClient *http.Client, config Config) (*Client,
 	}
 	config.ServerURL = strings.TrimRight(config.ServerURL, "/")
 	return &Client{store: store, http: httpClient, config: config, now: time.Now}, nil
-}
-
-// SuccessfulHeartbeatCount returns how many complete server responses have
-// been applied since this process started. The daemon uses this monotonically
-// increasing value to avoid enforcing stale state immediately after login.
-func (c *Client) SuccessfulHeartbeatCount() uint64 {
-	return atomic.LoadUint64(&c.successfulHeartbeatCount)
 }
 
 // SetGraphicalSession reports the established graphical session observed by
@@ -154,9 +145,9 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		failure := decodeHeartbeatError(response.StatusCode, response.Body)
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("heartbeat returned HTTP %d", response.StatusCode)
+		return protocol.HeartbeatResponse{}, failure
 	}
 	result, err := decodeHeartbeatResponse(response.Body)
 	if err != nil {
@@ -205,8 +196,22 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 			return protocol.HeartbeatResponse{}, fmt.Errorf("store confirmed session state: %w", err)
 		}
 	}
-	atomic.AddUint64(&c.successfulHeartbeatCount, 1)
 	return result, nil
+}
+
+func decodeHeartbeatError(status int, responseBody io.Reader) error {
+	var response protocol.ErrorResponse
+	decoder := json.NewDecoder(io.LimitReader(responseBody, 4096))
+	if err := decoder.Decode(&response); err == nil && response.Code == "revision_ahead" {
+		return fmt.Errorf(
+			"heartbeat rejected: local revision %d is newer than server revision %d; local state belongs to another enrollment or the server was restored from an older backup",
+			response.ClientRevision, response.ServerRevision,
+		)
+	}
+	if status == http.StatusConflict {
+		return errors.New("heartbeat rejected because local synchronization state is newer than the device on the server; local state may belong to another enrollment or the server may have been restored from an older backup")
+	}
+	return fmt.Errorf("heartbeat returned HTTP %d", status)
 }
 
 func decodeHeartbeatResponse(responseBody io.Reader) (protocol.HeartbeatResponse, error) {

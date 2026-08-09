@@ -63,6 +63,35 @@ func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 	}
 }
 
+func TestDecodeHeartbeatErrorExplainsRevisionConflict(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusConflict, strings.NewReader(
+		`{"error":"client synchronization state is newer than this device","code":"revision_ahead","client_revision":9,"server_revision":1}`,
+	))
+	if !strings.Contains(err.Error(), "local revision 9") ||
+		!strings.Contains(err.Error(), "server revision 1") ||
+		!strings.Contains(err.Error(), "another enrollment") {
+		t.Fatalf("revision conflict error=%q", err)
+	}
+}
+
+func TestDecodeHeartbeatErrorDoesNotExposeUntrustedServerMessage(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusUnauthorized, strings.NewReader(
+		`{"error":"secret supplied by an untrusted proxy"}`,
+	))
+	if err.Error() != "heartbeat returned HTTP 401" {
+		t.Fatalf("generic heartbeat error=%q", err)
+	}
+}
+
+func TestDecodeLegacyConflictStillExplainsRevisionCause(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusConflict, strings.NewReader(
+		`{"error":"heartbeat rejected"}`,
+	))
+	if !strings.Contains(err.Error(), "local synchronization state is newer") {
+		t.Fatalf("legacy revision conflict error=%q", err)
+	}
+}
+
 func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
@@ -115,9 +144,6 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	if _, err := client.Heartbeat(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	if client.SuccessfulHeartbeatCount() != 1 {
-		t.Fatalf("successful heartbeat count=%d, want 1", client.SuccessfulHeartbeatCount())
-	}
 	localPolicy, err := agentStore.LoadPolicy(ctx)
 	if err != nil || localPolicy.Revision != 10 {
 		t.Fatalf("initial revision=%d err=%v", localPolicy.Revision, err)
@@ -131,9 +157,6 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 	if _, err := client.Heartbeat(ctx, now.Add(21*time.Second)); err != nil {
 		t.Fatal(err)
-	}
-	if client.SuccessfulHeartbeatCount() != 2 {
-		t.Fatalf("successful heartbeat count=%d, want 2", client.SuccessfulHeartbeatCount())
 	}
 	localPolicy, err = agentStore.LoadPolicy(ctx)
 	if err != nil || localPolicy.Revision != 11 || localPolicy.WeeklyQuota[time.Monday] != time.Minute {
@@ -156,9 +179,6 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	atomic.StoreUint32(&online, 0)
 	if _, err := client.Heartbeat(ctx, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("offline heartbeat unexpectedly succeeded")
-	}
-	if client.SuccessfulHeartbeatCount() != 2 {
-		t.Fatal("failed heartbeat advanced the successful synchronization count")
 	}
 	tracker, err := agentstorage.NewUsageTracker(ctx, agentStore, "2026-08-10", 5*time.Second)
 	if err != nil {

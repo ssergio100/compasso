@@ -12,5 +12,4 @@ fi
 
 if [ "$1" = "purge" ]; then
   rm -rf /etc/tempo-agent /var/lib/tempo-agent
-  rm -f /run/compasso-pam-bypass
 fi

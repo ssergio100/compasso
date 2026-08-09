@@ -16,8 +16,8 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "nested", "agent.db"))
 	defer store.Close()
 
-	version, err := store.SchemaVersion(ctx)
-	if err != nil {
+	var version int
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if version != 3 {
@@ -29,28 +29,6 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	}
 	if integrity != "ok" {
 		t.Fatalf("integrity_check = %q, want ok", integrity)
-	}
-}
-
-func TestOpenReadOnlyReadsExistingDatabase(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "agent.db")
-	store := openTestStore(t, path)
-	if err := store.ReplacePolicy(ctx, samplePolicy(1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := OpenReadOnly(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policy, err := store.LoadPolicy(ctx)
-	if err != nil || policy.Revision != 1 {
-		t.Fatalf("read-only policy=%+v err=%v", policy, err)
 	}
 }
 
@@ -282,26 +260,6 @@ func TestOfflineBonusAndEventSurviveRestartAndPolicyReplacement(t *testing.T) {
 	events, err = store.PendingEvents(ctx, 10)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("events after acknowledgement = %+v, err=%v", events, err)
-	}
-}
-
-func TestGenericEventQueueIsIdempotent(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "agent.db"))
-	defer store.Close()
-	event := PendingEvent{
-		UUID: "event-uuid-1", Kind: "policy_applied", PayloadJSON: `{"revision":7}`,
-		CreatedAt: time.Date(2026, time.August, 8, 16, 0, 0, 0, time.UTC),
-	}
-	if err := store.EnqueueEvent(ctx, event); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnqueueEvent(ctx, event); err != nil {
-		t.Fatal(err)
-	}
-	events, err := store.PendingEvents(ctx, 10)
-	if err != nil || len(events) != 1 || events[0].UUID != event.UUID {
-		t.Fatalf("generic queue = %+v, err=%v", events, err)
 	}
 }
 

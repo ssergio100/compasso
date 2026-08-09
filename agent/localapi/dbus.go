@@ -18,27 +18,29 @@ const (
 	InterfaceName = "br.com.tempo.Agent"
 )
 
-// BonusAPI translates D-Bus requests into the tested local bonus service.
-type BonusAPI struct {
+// bonusAPI translates D-Bus requests into the local bonus service.
+type bonusAPI struct {
 	service *localauth.Service
 	now     func() time.Time
 }
 
-func NewBonusAPI(service *localauth.Service) (*BonusAPI, error) {
+func newBonusAPI(service *localauth.Service) (*bonusAPI, error) {
 	if service == nil {
 		return nil, errors.New("local bonus service is required")
 	}
-	return &BonusAPI{service: service, now: time.Now}, nil
+	return &bonusAPI{service: service, now: time.Now}, nil
 }
 
 // AddLocalBonus is called by the unprivileged GTK dialog. The password is
 // checked by the root agent and is never written to disk or logs.
-func (a *BonusAPI) AddLocalBonus(password string, seconds uint32) (string, *dbus.Error) {
+func (a *bonusAPI) AddLocalBonus(password string, seconds uint32) (string, *dbus.Error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := a.service.Grant(ctx, password, int64(seconds), a.now())
 	if err != nil {
 		switch {
+		case errors.Is(err, localauth.ErrPasswordNotConfigured):
+			return "", dbus.NewError(BusName+".Error.PasswordNotConfigured", []interface{}{"Nenhuma senha de administrador foi cadastrada."})
 		case errors.Is(err, localauth.ErrInvalidPassword):
 			return "", dbus.NewError(BusName+".Error.InvalidPassword", []interface{}{"Senha incorreta."})
 		case errors.Is(err, localauth.ErrRateLimited):
@@ -56,7 +58,7 @@ type Server struct {
 }
 
 func ExportSystem(service *localauth.Service) (*Server, error) {
-	api, err := NewBonusAPI(service)
+	api, err := newBonusAPI(service)
 	if err != nil {
 		return nil, err
 	}
