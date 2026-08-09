@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+if [ "$1" != "configure" ]; then
+  exit 0
+fi
+
+install -d -o root -g root -m 0700 /var/lib/tempo-agent
+chmod 0600 /etc/tempo-agent/config.toml
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+  systemctl disable --now tempo-agent.service 2>/dev/null || true
+fi
+
+# Every installation/upgrade requires an explicit confirmation in the graphical
+# assistant. Never infer consent from credentials left by an older package.
+rm -f /etc/tempo-agent/setup-complete
+
+if command -v busctl >/dev/null 2>&1 && [ -S /run/dbus/system_bus_socket ]; then
+  busctl call org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus ReloadConfig || true
+fi
+
+echo "Compasso instalado, mas ainda não iniciado."
+echo "Abra Compasso — Configurar agente para revisar os dados e iniciar."
+echo "O gate PAM permanece desativado."

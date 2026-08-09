@@ -9,6 +9,10 @@ var
 **/__pycache__
 **/*.pyc
 secrets
+.env*
+**/*.key
+**/*.pem
+**/*credentials*.json
 *.db
 *.db-shm
 *.db-wal

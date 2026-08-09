@@ -18,15 +18,25 @@ type fakeSessions struct {
 	terminateErr error
 }
 
+type fakeSynchronizationSource struct {
+	graphicalSessionActive bool
+	graphicalSessionID     string
+}
+
+func (f *fakeSynchronizationSource) SetGraphicalSession(active bool, sessionID string) {
+	f.graphicalSessionActive = active
+	f.graphicalSessionID = sessionID
+}
+
 func (f *fakeSessions) Sessions(context.Context, string) ([]session.Session, error) {
 	return append([]session.Session(nil), f.sessions...), nil
 }
 
-func (f *fakeSessions) Terminate(_ context.Context, id string) error {
+func (f *fakeSessions) Logout(_ context.Context, current session.Session) error {
 	if f.terminateErr != nil {
 		return f.terminateErr
 	}
-	f.terminated = append(f.terminated, id)
+	f.terminated = append(f.terminated, current.ID)
 	return nil
 }
 
@@ -97,6 +107,47 @@ func TestDelayedCycleDoesNotCountPastQuotaExpiry(t *testing.T) {
 	}
 	if status.UsageSeconds != 3 || status.Decision.Reason != policy.ReasonQuota || len(sessions.terminated) != 1 {
 		t.Fatalf("delayed expiry status=%+v terminated=%v", status, sessions.terminated)
+	}
+}
+
+func TestSynchronizedDaemonConsumesConfirmedBalanceWithoutRecalculatingQuota(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	// The copied policy deliberately says eight hours. In synchronized mode the
+	// three-second server anchor is the only balance authority.
+	if err := store.ReplacePolicy(ctx, testPolicy(4, start.Weekday(), 8*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+		Revision: 4, SessionID: "3", LocalDate: start.Format("2006-01-02"),
+		RemainingSeconds: 3, UsageSeconds: 0, ConfirmedAt: start,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sessions := graphicalFake()
+	synchronization := &fakeSynchronizationSource{}
+	policyDaemon, err := New(store, sessions, "child", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyDaemon.SetSynchronizationSource(synchronization)
+
+	first, err := policyDaemon.Step(ctx, start)
+	if err != nil || !first.Decision.Allowed || first.Decision.Remaining != 3*time.Second {
+		t.Fatalf("first confirmed decision=%+v err=%v", first, err)
+	}
+	second, err := policyDaemon.Step(ctx, start.Add(2*time.Second))
+	if err != nil || second.Decision.Remaining != time.Second || second.UsageSeconds != 2 {
+		t.Fatalf("decremented confirmed decision=%+v err=%v", second, err)
+	}
+	expired, err := policyDaemon.Step(ctx, start.Add(3*time.Second))
+	if err != nil || expired.Decision.Reason != policy.ReasonQuota || len(sessions.terminated) != 1 {
+		t.Fatalf("confirmed balance expiry=%+v terminated=%v err=%v", expired, sessions.terminated, err)
+	}
+	if !synchronization.graphicalSessionActive || synchronization.graphicalSessionID != "3" {
+		t.Fatalf("reported graphical session active=%t id=%q", synchronization.graphicalSessionActive, synchronization.graphicalSessionID)
 	}
 }
 
@@ -230,7 +281,7 @@ func TestNoGraphicalSessionDoesNotCount(t *testing.T) {
 	}
 }
 
-func TestBlockedStateTerminatesEachNewSession(t *testing.T) {
+func TestBlockedReloginWaitsForActiveSessionToStabilize(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)
 	defer store.Close()
@@ -243,14 +294,115 @@ func TestBlockedStateTerminatesEachNewSession(t *testing.T) {
 	if _, err := daemon.Step(ctx, start); err != nil {
 		t.Fatal(err)
 	}
-	sessions.sessions = []session.Session{{
-		ID: "5", User: "child", Type: "x11", Class: "user", State: "active",
-	}}
-	if _, err := daemon.Step(ctx, start.Add(time.Second)); err != nil {
+	if _, err := daemon.Step(ctx, start.Add(blockedReloginStabilization-time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions.terminated) != 2 || sessions.terminated[0] != "3" || sessions.terminated[1] != "5" {
-		t.Fatalf("terminated sessions = %v, want [3 5]", sessions.terminated)
+	if len(sessions.terminated) != 0 {
+		t.Fatalf("new session terminated during desktop startup: %v", sessions.terminated)
+	}
+	if _, err := daemon.Step(ctx, start.Add(blockedReloginStabilization)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.terminated) != 1 || sessions.terminated[0] != "3" {
+		t.Fatalf("stabilized blocked session was not terminated: %v", sessions.terminated)
+	}
+}
+
+func TestBlockedReloginWaitsUntilLogindReportsActive(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, testPolicy(1, start.Weekday(), 0)); err != nil {
+		t.Fatal(err)
+	}
+	sessions := &fakeSessions{sessions: []session.Session{{
+		ID: "5", User: "child", Type: "wayland", Class: "user", State: "opening",
+	}}}
+	daemon, _ := New(store, sessions, "child", time.Second)
+	if _, err := daemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.Step(ctx, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.terminated) != 0 {
+		t.Fatalf("opening session terminated: %v", sessions.terminated)
+	}
+	sessions.sessions[0].State = "active"
+	if _, err := daemon.Step(ctx, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.Step(ctx, start.Add(time.Minute+blockedReloginStabilization)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.terminated) != 1 || sessions.terminated[0] != "5" {
+		t.Fatalf("active stabilized session was not terminated: %v", sessions.terminated)
+	}
+}
+
+func TestBlockedLoginWaitsForConfirmedSessionState(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, testPolicy(1, start.Weekday(), 0)); err != nil {
+		t.Fatal(err)
+	}
+	sessions := graphicalFake()
+	synchronization := &fakeSynchronizationSource{}
+	policyDaemon, _ := New(store, sessions, "child", time.Second)
+	policyDaemon.SetSynchronizationSource(synchronization)
+
+	status, err := policyDaemon.Step(ctx, start)
+	if err != nil || !status.AwaitingSynchronization || len(sessions.terminated) != 0 {
+		t.Fatalf("initial blocked login status=%+v err=%v terminated=%v", status, err, sessions.terminated)
+	}
+	status, err = policyDaemon.Step(ctx, start.Add(blockedReloginStabilization))
+	if err != nil || !status.AwaitingSynchronization || len(sessions.terminated) != 0 {
+		t.Fatalf("offline blocked login status=%+v err=%v terminated=%v", status, err, sessions.terminated)
+	}
+
+	if err := store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+		Revision: 1, SessionID: "3", LocalDate: start.Format("2006-01-02"),
+		RemainingSeconds: 0, UsageSeconds: 0, ConfirmedAt: start.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, err = policyDaemon.Step(ctx, start.Add(blockedReloginStabilization+time.Second))
+	if err != nil || status.AwaitingSynchronization || len(sessions.terminated) != 1 {
+		t.Fatalf("confirmed blocked login status=%+v err=%v terminated=%v", status, err, sessions.terminated)
+	}
+}
+
+func TestBlockedLoginRemainsOpenWhenConfirmedStateAddsTime(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, testPolicy(1, start.Weekday(), 0)); err != nil {
+		t.Fatal(err)
+	}
+	sessions := graphicalFake()
+	synchronization := &fakeSynchronizationSource{}
+	policyDaemon, _ := New(store, sessions, "child", time.Second)
+	policyDaemon.SetSynchronizationSource(synchronization)
+	if _, err := policyDaemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReplacePolicy(ctx, testPolicy(2, start.Weekday(), time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+		Revision: 2, SessionID: "3", LocalDate: start.Format("2006-01-02"),
+		RemainingSeconds: 60, UsageSeconds: 0, ConfirmedAt: start.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := policyDaemon.Step(ctx, start.Add(time.Second))
+	if err != nil || !status.Decision.Allowed || status.AwaitingSynchronization || len(sessions.terminated) != 0 {
+		t.Fatalf("updated blocked login status=%+v err=%v terminated=%v", status, err, sessions.terminated)
 	}
 }
 

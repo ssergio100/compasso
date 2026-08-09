@@ -112,17 +112,24 @@ func (s *Store) AddBonusWithEvent(ctx context.Context, bonus Bonus, event Pendin
 	if bonus.UUID != event.UUID {
 		return errors.New("bonus and event UUID must match")
 	}
+	s.sessionStateMu.Lock()
+	defer s.sessionStateMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin bonus transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
+	bonusResult, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO bonus(uuid, local_date, seconds, origin, created_at)
 		VALUES (?, ?, ?, ?, ?)`,
 		bonus.UUID, bonus.LocalDate, bonus.Seconds, bonus.Origin, formatTime(bonus.CreatedAt),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store bonus: %w", err)
+	}
+	bonusInserted, err := bonusResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect stored bonus: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO pending_event(uuid, kind, payload_json, created_at, retry_count)
@@ -131,8 +138,19 @@ func (s *Store) AddBonusWithEvent(ctx context.Context, bonus Bonus, event Pendin
 	); err != nil {
 		return fmt.Errorf("store pending bonus event: %w", err)
 	}
+	if bonusInserted != 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE confirmed_session_state
+			SET remaining_seconds=remaining_seconds+?
+			WHERE singleton_id=1 AND local_date=?`, bonus.Seconds, bonus.LocalDate); err != nil {
+			return fmt.Errorf("add local bonus to confirmed balance: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit bonus transaction: %w", err)
+	}
+	if err := s.refreshConfirmedSessionStateLocked(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -187,6 +205,8 @@ func (s *Store) AcknowledgeEvent(ctx context.Context, uuid string) error {
 	if uuid == "" {
 		return errors.New("event UUID cannot be empty")
 	}
+	s.sessionStateMu.Lock()
+	defer s.sessionStateMu.Unlock()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_event WHERE uuid = ?`, uuid); err != nil {
 		return fmt.Errorf("acknowledge pending event: %w", err)
 	}
@@ -283,6 +303,24 @@ func (t *UsageTracker) Seconds() int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.seconds
+}
+
+// EnsureAtLeast reconciles a server-confirmed absolute counter after a local
+// crash may have lost an uncheckpointed tail. It never reduces local usage.
+func (t *UsageTracker) EnsureAtLeast(ctx context.Context, seconds int64, now time.Time) error {
+	if seconds < 0 || now.IsZero() {
+		return errors.New("minimum usage must be non-negative and time must be set")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if seconds <= t.seconds {
+		return nil
+	}
+	t.seconds = seconds
+	t.uncheckpointed = 0
+	return t.store.CheckpointUsage(ctx, DailyUsage{
+		LocalDate: t.localDate, SecondsUsed: seconds, CheckpointAt: now,
+	})
 }
 
 func validateLocalDate(localDate string) error {

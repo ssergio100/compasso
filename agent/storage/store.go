@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -22,7 +23,13 @@ var (
 
 // Store owns the agent's local SQLite connection.
 type Store struct {
-	db *sql.DB
+	db                    *sql.DB
+	policyMu              sync.RWMutex
+	cachedPolicy          PolicySnapshot
+	hasCachedPolicy       bool
+	sessionStateMu        sync.RWMutex
+	confirmedSessionState ConfirmedSessionState
+	hasConfirmedState     bool
 }
 
 // Open opens (or creates) an agent database and applies all embedded migrations.
@@ -57,6 +64,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("connect sqlite database: %w", err)
 	}
 	if err := s.applyMigrations(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.refreshPolicyCache(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.refreshConfirmedSessionStateLocked(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

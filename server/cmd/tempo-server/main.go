@@ -35,6 +35,10 @@ func run(configPath string, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
+	settings, err = config.ApplyEnvironmentOverrides(settings, os.Getenv)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(settings.DatabasePath), 0o700); err != nil {
 		return fmt.Errorf("create server state directory: %w", err)
 	}
@@ -65,8 +69,8 @@ func run(configPath string, logger *log.Logger) error {
 			logger.Printf("initial administrator created login=%s", bootstrapLogin)
 		}
 	}
-	application, err := web.NewWithAssets(
-		store, settings.SecureCookies, settings.SessionLifetime, settings.AssetsDirectory, settings.OnlineTimeout,
+	application, err := web.New(
+		store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout, settings.AdminOrigin,
 	)
 	if err != nil {
 		return err

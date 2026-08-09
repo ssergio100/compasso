@@ -20,8 +20,8 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
 	}
 	var integrity string
 	if err := store.db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
@@ -302,6 +302,76 @@ func TestGenericEventQueueIsIdempotent(t *testing.T) {
 	events, err := store.PendingEvents(ctx, 10)
 	if err != nil || len(events) != 1 || events[0].UUID != event.UUID {
 		t.Fatalf("generic queue = %+v, err=%v", events, err)
+	}
+}
+
+func TestConfirmedSessionStatePersistsAndPreservesInFlightLocalBonus(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agent.db")
+	store := openTestStore(t, path)
+	confirmedAt := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	initial := ConfirmedSessionState{
+		Revision: 2, SessionID: "session-7", LocalDate: "2026-08-10",
+		RemainingSeconds: 600, UsageSeconds: 10, ConfirmedAt: confirmedAt,
+	}
+	if err := store.SaveConfirmedSessionState(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+	bonus := Bonus{
+		UUID: "bonus-during-heartbeat", LocalDate: initial.LocalDate,
+		Seconds: 300, Origin: "local", CreatedAt: confirmedAt.Add(time.Second),
+	}
+	event := PendingEvent{
+		UUID: bonus.UUID, Kind: "bonus_added", PayloadJSON: `{"seconds":300}`,
+		CreatedAt: bonus.CreatedAt,
+	}
+	if err := store.AddBonusWithEvent(ctx, bonus, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddBonusWithEvent(ctx, bonus, event); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := store.CurrentConfirmedSessionState()
+	if !ok || state.RemainingSeconds != 900 {
+		t.Fatalf("state after idempotent local bonus=%+v available=%t", state, ok)
+	}
+
+	// Model a response calculated before the local bonus was created. Because
+	// the event is still pending, saving that response must retain the 300 s.
+	inFlightResponse := ConfirmedSessionState{
+		Revision: 2, SessionID: "session-7", LocalDate: initial.LocalDate,
+		RemainingSeconds: 590, UsageSeconds: 20, ConfirmedAt: confirmedAt.Add(2 * time.Second),
+	}
+	if err := store.SaveConfirmedSessionState(ctx, inFlightResponse); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = store.CurrentConfirmedSessionState()
+	if state.RemainingSeconds != 890 {
+		t.Fatalf("in-flight response erased local bonus: %+v", state)
+	}
+
+	if err := store.AcknowledgeEvent(ctx, bonus.UUID); err != nil {
+		t.Fatal(err)
+	}
+	serverIncludesBonus := inFlightResponse
+	serverIncludesBonus.RemainingSeconds = 890
+	serverIncludesBonus.ConfirmedAt = confirmedAt.Add(3 * time.Second)
+	if err := store.SaveConfirmedSessionState(ctx, serverIncludesBonus); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store = openTestStore(t, path)
+	defer store.Close()
+	state, ok = store.CurrentConfirmedSessionState()
+	if !ok || state.RemainingSeconds != 890 || state.UsageSeconds != 20 {
+		t.Fatalf("persisted confirmed state=%+v available=%t", state, ok)
+	}
+	usage, err := store.LoadDailyUsage(ctx, initial.LocalDate)
+	if err != nil || usage.SecondsUsed != 20 {
+		t.Fatalf("reconciled usage=%+v err=%v", usage, err)
 	}
 }
 

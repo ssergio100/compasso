@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Compasso — Configurar agente
+Comment=Conectar esta máquina ao servidor Compasso
+Exec=/usr/bin/compasso-agent-setup
+Icon=preferences-system-time
+Terminal=false
+Categories=Settings;System;

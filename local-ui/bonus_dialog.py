@@ -30,7 +30,7 @@ def friendly_error(error):
 
 class BonusWindow(Gtk.ApplicationWindow):
     def __init__(self, application):
-        super().__init__(application=application, title="Adicionar tempo — Compasso")
+        super().__init__(application=application, title="Compasso — Adicionar tempo")
         self.set_default_size(420, 260)
         self.set_resizable(False)
         self.proxy = None

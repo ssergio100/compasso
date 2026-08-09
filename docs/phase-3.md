@@ -7,9 +7,14 @@
 - descoberta de sessões gráficas locais pelo `systemd-logind` via `loginctl`;
 - contabilização monotônica somente durante uma sessão permitida;
 - checkpoint SQLite e divisão correta do consumo na virada do dia;
-- logout de todas as sessões gráficas controladas quando cota, rotina ou
-  bloqueio manual impedir o uso;
-- nova tentativa para qualquer sessão que apareça enquanto o bloqueio persistir;
+- solicitação de logout ordenado ao gerenciador de cada sessão gráfica
+  controlada quando cota, rotina ou bloqueio manual impedir o uso;
+- a implementação original repetia imediatamente o encerramento para qualquer
+  sessão que aparecesse durante o bloqueio; o teste real revelou que isso podia
+  interromper a abertura do Plasma e deixar tela preta com cursor;
+- a correção aguarda o logind informar estado `active` e mais dez segundos de
+  estabilização antes de solicitar logout. KDE e GNOME são acionados por D-Bus
+  e não existe fallback para `loginctl terminate-session`;
 - unidade systemd sem dependência de rede e com reinício em falha.
 
 O agente e a unidade não contêm domínio, endereço de servidor nem regra de
@@ -23,9 +28,12 @@ Execute:
 make test
 ```
 
-Os testes cobrem expiração de cota, início de rotina, pausa antes da expiração,
-ausência de sessão gráfica, múltiplas tentativas de sessão durante bloqueio,
-virada do dia, atraso do ciclo e falha temporária ao solicitar logout.
+Os testes originais cobrem expiração de cota, início de rotina, pausa antes da
+expiração, ausência de sessão gráfica, múltiplas tentativas de sessão durante
+bloqueio, virada do dia, atraso do ciclo e falha temporária ao solicitar logout.
+O cenário de relogin foi substituído por testes que confirmam que sessões em
+estado `opening` não são encerradas e que a estabilização começa somente quando
+o estado muda para `active`.
 
 ## Validação pendente no Zorin
 
@@ -40,8 +48,9 @@ tenham passado nos testes automatizados:
 5. iniciar uma rotina curta e confirmar o encerramento da sessão;
 6. pausar antes do bloqueio e confirmar que não há logout nem consumo.
 
-A fase 3 encerra uma sessão que reapareça, mas não consegue recusar o login no
-greeter. A recusa antecipada será implementada pelo gate PAM da fase 4.
+A autenticação no greeter permanece permitida. O agente agora espera a nova
+sessão gráfica ficar estabelecida antes de solicitar logout. A confirmação do
+retorno normal ao greeter, sem tela preta, continua pendente em máquina real.
 
 ## Instalação manual provisória
 

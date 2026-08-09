@@ -1,4 +1,10 @@
-# Fase 4 — gate PAM contra novo login
+# Fase 4 — requisito de login substituído
+
+> O gate PAM descrito abaixo pertence ao protótipo anterior e permanece
+> desativado. O requisito atual permite a autenticação do usuário bloqueado;
+> depois que a sessão gráfica estiver estabelecida, o agente deve executar um
+> logout seguro e retornar ao greeter sem tela preta. Este procedimento não
+> deve ser usado no pacote atual.
 
 ## Escopo implementado
 
@@ -18,9 +24,10 @@ para qualquer conta diferente da controlada. A preparação técnica ainda é fe
 pelos executáveis de instalação; o teste humano acontece exclusivamente pela
 tela gráfica de login do Zorin.
 
-## Preparação técnica no Zorin
+## Registro histórico da preparação técnica
 
-Antes do teste real, confirme que o display manager usa
+Os comandos abaixo registram como o protótipo era ensaiado e **não devem mais
+ser executados**. Antes do teste real, confirmava-se que o display manager usava
 `/etc/pam.d/gdm-password`. Depois de compilar e instalar o agente da fase 3:
 
 ```bash
@@ -40,7 +47,9 @@ Para remover o gate e restaurar o arquivo anterior:
 sudo tempo-pam-setup -action uninstall
 ```
 
-## Teste humano
+## Teste humano substituído
+
+O roteiro abaixo também é apenas histórico e não é critério de aceite atual:
 
 1. Com política liberada, entrar normalmente na conta controlada.
 2. Aplicar uma política bloqueada e tentar entrar novamente pela tela do Zorin.

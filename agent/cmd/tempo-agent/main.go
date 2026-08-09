@@ -20,6 +20,7 @@ import (
 	"github.com/sergio/compasso/agent/session"
 	"github.com/sergio/compasso/agent/storage"
 	"github.com/sergio/compasso/agent/syncclient"
+	"github.com/sergio/compasso/agent/syncstatus"
 )
 
 func main() {
@@ -101,6 +102,22 @@ func run(configPath string, logger *log.Logger) error {
 		if err != nil {
 			return err
 		}
+		runtimeDirectory := os.Getenv("RUNTIME_DIRECTORY")
+		if runtimeDirectory != "" {
+			statusPath := filepath.Join(runtimeDirectory, "synchronization-status.json")
+			_ = os.Remove(statusPath)
+			synchronizer.SetStatusReporter(func(synchronizationError error) {
+				report := syncstatus.Report{State: syncstatus.StateOnline}
+				if synchronizationError != nil {
+					report.State = syncstatus.StateOffline
+					report.Detail = synchronizationError.Error()
+				}
+				if err := syncstatus.Write(statusPath, report); err != nil {
+					logger.Printf("write synchronization status: %v", err)
+				}
+			})
+		}
+		policyDaemon.SetSynchronizationSource(synchronizer)
 		go func() {
 			if err := synchronizer.Run(ctx, logger); err != nil {
 				logger.Printf("synchronization stopped: %v", err)

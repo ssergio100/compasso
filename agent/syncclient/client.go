@@ -11,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sergio/compasso/agent/storage"
@@ -25,10 +27,27 @@ type Config struct {
 }
 
 type Client struct {
-	store  *storage.Store
-	http   *http.Client
-	config Config
-	now    func() time.Time
+	store                    *storage.Store
+	http                     *http.Client
+	config                   Config
+	now                      func() time.Time
+	successfulHeartbeatCount uint64
+	graphicalSessionMu       sync.RWMutex
+	graphicalSessionActive   bool
+	graphicalSessionID       string
+	statusReporter           func(error)
+}
+
+// SetStatusReporter registers a process-local observer for synchronization
+// state transitions. Reports contain sanitized errors and never credentials.
+func (c *Client) SetStatusReporter(reporter func(error)) {
+	c.statusReporter = reporter
+}
+
+func (c *Client) reportStatus(err error) {
+	if c.statusReporter != nil {
+		c.statusReporter(err)
+	}
 }
 
 func New(store *storage.Store, httpClient *http.Client, config Config) (*Client, error) {
@@ -40,6 +59,32 @@ func New(store *storage.Store, httpClient *http.Client, config Config) (*Client,
 	}
 	config.ServerURL = strings.TrimRight(config.ServerURL, "/")
 	return &Client{store: store, http: httpClient, config: config, now: time.Now}, nil
+}
+
+// SuccessfulHeartbeatCount returns how many complete server responses have
+// been applied since this process started. The daemon uses this monotonically
+// increasing value to avoid enforcing stale state immediately after login.
+func (c *Client) SuccessfulHeartbeatCount() uint64 {
+	return atomic.LoadUint64(&c.successfulHeartbeatCount)
+}
+
+// SetGraphicalSession reports the established graphical session observed by
+// logind. Heartbeat takes a consistent snapshot without depending on desktop
+// environment variables.
+func (c *Client) SetGraphicalSession(active bool, sessionID string) {
+	if !active {
+		sessionID = ""
+	}
+	c.graphicalSessionMu.Lock()
+	c.graphicalSessionActive = active
+	c.graphicalSessionID = sessionID
+	c.graphicalSessionMu.Unlock()
+}
+
+func (c *Client) graphicalSession() (bool, string) {
+	c.graphicalSessionMu.RLock()
+	defer c.graphicalSessionMu.RUnlock()
+	return c.graphicalSessionActive, c.graphicalSessionID
 }
 
 // Heartbeat performs one cycle. Durable events are removed only when their
@@ -56,6 +101,8 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		return protocol.HeartbeatResponse{}, err
 	}
 	localDate := now.Format("2006-01-02")
+	graphicalSessionActive, graphicalSessionID := c.graphicalSession()
+	confirmedState, hasConfirmedState := c.store.CurrentConfirmedSessionState()
 	usage, err := c.store.LoadDailyUsage(ctx, localDate)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -70,8 +117,16 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 	}
 	request := protocol.HeartbeatRequest{
 		PolicyRevision: revision, LocalDate: localDate, SecondsUsed: usage.SecondsUsed,
-		CommandAcks: commandAcks,
+		GraphicalSessionActive: graphicalSessionActive,
+		GraphicalSessionID:     graphicalSessionID,
+		CommandAcks:            commandAcks,
 	}
+	if hasConfirmedState {
+		request.SessionStateRevision = confirmedState.Revision
+	}
+	request.RequestSessionState = graphicalSessionActive && (!hasConfirmedState ||
+		confirmedState.SessionID != graphicalSessionID || confirmedState.LocalDate != localDate ||
+		confirmedState.Revision < revision)
 	for _, event := range pending {
 		if !json.Valid([]byte(event.PayloadJSON)) {
 			_ = c.store.IncrementEventRetry(ctx, event.UUID)
@@ -123,6 +178,34 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 			return protocol.HeartbeatResponse{}, fmt.Errorf("apply command %s: %w", command.ID, err)
 		}
 	}
+	if request.RequestSessionState && result.SessionState == nil {
+		return protocol.HeartbeatResponse{}, errors.New("server did not return the requested session state")
+	}
+	if result.Policy != nil && graphicalSessionActive &&
+		result.Policy.Revision > request.SessionStateRevision && result.SessionState == nil {
+		return protocol.HeartbeatResponse{}, errors.New("server changed policy without confirming the active session balance")
+	}
+	if result.SessionState != nil {
+		if !graphicalSessionActive || result.SessionState.SessionID != graphicalSessionID ||
+			result.SessionState.LocalDate != localDate || result.SessionState.Revision < 0 ||
+			result.SessionState.RemainingSeconds < 0 || result.SessionState.UsageSeconds < 0 ||
+			result.SessionState.ConfirmedAt.IsZero() {
+			return protocol.HeartbeatResponse{}, errors.New("server returned an invalid session state")
+		}
+		if result.Policy != nil && result.SessionState.Revision < result.Policy.Revision {
+			return protocol.HeartbeatResponse{}, errors.New("server returned a session state older than its policy")
+		}
+		if err := c.store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+			Revision: result.SessionState.Revision, SessionID: result.SessionState.SessionID,
+			LocalDate:        result.SessionState.LocalDate,
+			RemainingSeconds: result.SessionState.RemainingSeconds,
+			UsageSeconds:     result.SessionState.UsageSeconds,
+			ConfirmedAt:      result.SessionState.ConfirmedAt,
+		}); err != nil {
+			return protocol.HeartbeatResponse{}, fmt.Errorf("store confirmed session state: %w", err)
+		}
+	}
+	atomic.AddUint64(&c.successfulHeartbeatCount, 1)
 	return result, nil
 }
 
@@ -203,6 +286,7 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		if err != nil {
 			if online || first {
 				logger.Printf("synchronization offline: %v", err)
+				c.reportStatus(err)
 			}
 			online, first = false, false
 			delay = backoff
@@ -214,6 +298,7 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		}
 		if !online {
 			logger.Printf("synchronization online")
+			c.reportStatus(nil)
 		}
 		online, first = true, false
 		backoff = time.Second

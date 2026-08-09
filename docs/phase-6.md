@@ -36,7 +36,7 @@ python3 bonus_dialog.py
 
 Confira:
 
-1. a janela abre com título “Adicionar tempo — Compasso”;
+1. a janela abre com título “Compasso — Adicionar tempo”;
 2. aparecem as quatro opções de duração;
 3. a senha fica oculta;
 4. sem o agente instalado, aparece uma mensagem clara de serviço indisponível.
@@ -49,7 +49,7 @@ O teste completo exige o agente instalado, uma política com verificador de senh
 e a regra D-Bus em `packaging/dbus/br.com.tempo.Agent.conf`. Quando a máquina
 estiver preparada, o roteiro humano será:
 
-1. abrir “Adicionar tempo — Compasso” pelo menu;
+1. abrir “Compasso — Adicionar tempo” pelo menu;
 2. escolher 15 minutos, digitar senha errada e confirmar a mensagem;
 3. tentar imediatamente e confirmar o rate limit;
 4. aguardar dois segundos, informar a senha correta e confirmar “15 minutos”;

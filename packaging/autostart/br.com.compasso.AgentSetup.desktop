@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Compasso — Configuração inicial
+Comment=Concluir a configuração inicial do agente Compasso
+Exec=/usr/bin/compasso-agent-setup --first-run
+Icon=preferences-system-time
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

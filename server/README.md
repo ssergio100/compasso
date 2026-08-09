@@ -1,47 +1,42 @@
-# Server
+# Server API
 
-O `tempo-server` serve o painel administrativo e, a partir da fase 8, a API de
-sincronização. Não há domínio fixo no código; Docker, Cloudflare Tunnel e os
-subdomínios continuam sendo decisões de implantação.
+O `tempo-server` oferece somente a API JSON de administração e sincronização.
+Ele não lê, renderiza nem serve a interface web. O painel independente vive em
+`admin-ui/` e recebe a URL da API em runtime.
 
 ## Desenvolvimento
 
-Crie a configuração local e informe as credenciais do primeiro administrador
-somente no primeiro início:
+Crie a configuração local e inicie a API sem credenciais de instalação:
 
 ```bash
 cp server/config.example.toml server/config.toml
-TEMPO_ADMIN_LOGIN=admin TEMPO_ADMIN_PASSWORD='uma-senha-de-teste' \
-  go run ./server/cmd/tempo-server -config server/config.toml
+go run ./server/cmd/tempo-server -config server/config.toml
 ```
 
-Abra `http://127.0.0.1:8080`. Depois que o primeiro administrador existe, as
-variáveis podem ser omitidas; elas nunca substituem uma conta já criada.
-
-O painel não é embutido no executável. `assets_directory` aponta para os
-templates HTML e arquivos estáticos externos. Durante o desenvolvimento, uma
-alteração nesses arquivos aparece ao atualizar o navegador, sem recompilar ou
-reiniciar o servidor. Essa fronteira também permite substituir a interface por
-um build React ou outra tecnologia no futuro sem misturá-la ao núcleo Go.
+Use `http://127.0.0.1:8080/healthz` para verificar o processo. A interface
+administrativa detecta o banco novo e oferece a criação do primeiro acesso no
+navegador. A configuração inicial deixa de existir após essa criação.
 
 Em produção, `secure_cookies` deve ser `true`. O SQLite definido por
 `database_path` precisa ficar em volume persistente do servidor Docker.
 
-## Produção com Docker e Cloudflare Tunnel
+## Produção com Docker
 
-O arquivo `compose.production.yml` executa o servidor como usuário não-root,
-remove capabilities, usa filesystem somente leitura e publica a porta apenas em
-`127.0.0.1`. O `cloudflared` encaminha os dois subdomínios HTTPS para essa origem
-local conforme `packaging/cloudflared/config.example.yml`.
+O `compose.yaml` executa API e frontend em imagens independentes, como usuários
+sem privilégios, com capabilities removidas e filesystem somente leitura. Bind,
+portas, origem administrativa, URL pública da API e cookies seguros são
+configurados por `.env`, sem dependência de um produto de exposição específico.
 
-O cliente usa `https://apicompasso.smresume.com` e o painel administrativo usa
-`https://admcompasso.smresume.com`. Esses nomes pertencem à infraestrutura e não
-estão fixados no código.
+Cloudflare Tunnel, proxy reverso, VPN, acesso somente por LAN ou qualquer outra
+forma de exposição são decisões externas ao servidor Compasso.
 
 ## Fases 7 e 8
 
 O painel implementa login, expiração de sessão, CSRF, dispositivos, cotas
 semanais, rotinas, senha local Argon2id, dashboard e histórico. A API de
 heartbeat autentica cada dispositivo, consolida consumo/eventos de forma
-idempotente e entrega política e comandos. O painel mostra conexão e revisão
-aplicada pelo agente.
+idempotente e entrega política e comandos. Para clientes novos, ele também
+confirma o saldo ao autorizar uma sessão gráfica e só envia outra âncora quando
+uma revisão relevante mudar. Presença do agente e presença de sessão gráfica
+são estados separados; o painel só anima o contador quando há sessão ativa. O
+painel também mostra conexão e revisão aplicada pelo agente.

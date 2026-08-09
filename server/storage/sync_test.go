@@ -61,6 +61,10 @@ func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
 	if err != nil || summary.UsedSeconds != 120 || summary.BonusSeconds != 300 {
 		t.Fatalf("duplicate changed summary=%+v err=%v", summary, err)
 	}
+	latestLocalDate, err := store.LatestHeartbeatLocalDate(ctx, device.ID)
+	if err != nil || latestLocalDate != "2026-08-10" {
+		t.Fatalf("latest heartbeat local date=%q err=%v", latestLocalDate, err)
+	}
 	events, err := store.ListAudit(ctx, device.ID, 50)
 	if err != nil {
 		t.Fatal(err)

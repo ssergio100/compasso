@@ -2,6 +2,17 @@
 
 Interface Python 3/PyGObject/GTK 4 para concessão local de bônus e alertas de sessão.
 
+## Configuração inicial do agente
+
+`configure_agent.py` solicita a conta Linux controlada, URL HTTPS do servidor,
+`device_id` e `device_token`. A janela envia os valores pela entrada padrão do
+helper privilegiado, após autorização Polkit; o token não é colocado em
+argumentos de processo nem em logs. O pacote inicia essa janela no primeiro
+login enquanto `/etc/tempo-agent/setup-complete` não existir.
+
+Depois de validar e gravar `/etc/tempo-agent/config.toml` com modo `0600`, o
+helper habilita e inicia `tempo-agent.service`.
+
 ## Fase 5 — Alertas de sessão
 
 Este diretório contém um helper básico de eventos para o agente local. Em produção,

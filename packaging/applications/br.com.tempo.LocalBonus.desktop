@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Adicionar tempo — Compasso
+Name=Compasso — Adicionar tempo
 Comment=Adicionar tempo de uso com a senha do responsável
 Exec=/usr/bin/tempo-local-bonus
 Icon=preferences-system-time

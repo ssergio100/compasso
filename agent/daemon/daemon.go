@@ -14,14 +14,23 @@ import (
 	"github.com/sergio/compasso/agent/storage"
 )
 
-const localDateLayout = "2006-01-02"
+const (
+	localDateLayout             = "2006-01-02"
+	blockedReloginStabilization = 10 * time.Second
+)
 
 // Status describes one completed daemon cycle.
 type Status struct {
-	Decision         policy.Decision
-	GraphicalSession bool
-	UsageSeconds     int64
-	DueAlerts        []alert.Alert
+	Decision                policy.Decision
+	GraphicalSession        bool
+	AwaitingSynchronization bool
+	UsageSeconds            int64
+	DueAlerts               []alert.Alert
+}
+
+// SynchronizationSource receives session presence for the next heartbeat.
+type SynchronizationSource interface {
+	SetGraphicalSession(active bool, sessionID string)
 }
 
 // Daemon owns the runtime state that is intentionally not persisted between
@@ -32,19 +41,28 @@ type Daemon struct {
 	controlledUser  string
 	checkpointEvery time.Duration
 
-	tracker         *storage.UsageTracker
-	trackerDate     string
-	lastAt          time.Time
-	lastShouldCount bool
-	lastHadSession  bool
-	lastCountUntil  time.Time
-	fraction        time.Duration
-	terminated      map[string]bool
-	alertNotifier   alert.Notifier
+	tracker               *storage.UsageTracker
+	trackerDate           string
+	lastAt                time.Time
+	lastShouldCount       bool
+	lastHadSession        bool
+	lastCountUntil        time.Time
+	fraction              time.Duration
+	terminated            map[string]bool
+	allowedSessions       map[string]bool
+	blockedActiveAt       map[string]time.Time
+	synchronizationSource SynchronizationSource
+	alertNotifier         alert.Notifier
 }
 
 func (d *Daemon) SetAlertNotifier(notifier alert.Notifier) {
 	d.alertNotifier = notifier
+}
+
+// SetSynchronizationSource enables server-confirmed balance authorization and
+// graphical-session reporting.
+func (d *Daemon) SetSynchronizationSource(source SynchronizationSource) {
+	d.synchronizationSource = source
 }
 
 // New creates a daemon controller. Call Step periodically or Run for the
@@ -61,7 +79,10 @@ func New(store *storage.Store, sessions session.Manager, controlledUser string, 
 	}
 	return &Daemon{
 		store: store, sessions: sessions, controlledUser: controlledUser,
-		checkpointEvery: checkpointEvery, terminated: make(map[string]bool),
+		checkpointEvery: checkpointEvery,
+		terminated:      make(map[string]bool),
+		allowedSessions: make(map[string]bool),
+		blockedActiveAt: make(map[string]time.Time),
 	}, nil
 }
 
@@ -75,7 +96,7 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		return Status{}, errors.New("step time moved backwards")
 	}
 
-	snapshot, err := d.store.LoadPolicy(ctx)
+	snapshot, err := d.store.CurrentPolicy()
 	if err != nil {
 		return Status{}, err
 	}
@@ -84,6 +105,11 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		return Status{}, err
 	}
 	graphical := graphicalSessions(allSessions)
+	activeGraphicalSessionID := establishedGraphicalSessionID(graphical)
+	if d.synchronizationSource != nil {
+		d.synchronizationSource.SetGraphicalSession(activeGraphicalSessionID != "", activeGraphicalSessionID)
+	}
+	d.forgetSessionsNoLongerPresent(graphical)
 	localDate := now.Format(localDateLayout)
 	if d.tracker == nil {
 		if err := d.prepareTracker(ctx, localDate, now); err != nil {
@@ -117,9 +143,25 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		}
 	}
 
-	decision, err := d.evaluate(ctx, snapshot, now)
-	if err != nil {
-		return Status{}, err
+	confirmedState, hasConfirmedState := d.store.CurrentConfirmedSessionState()
+	if hasConfirmedState && confirmedState.LocalDate == localDate && d.tracker.Seconds() < confirmedState.UsageSeconds {
+		if err := d.tracker.EnsureAtLeast(ctx, confirmedState.UsageSeconds, now); err != nil {
+			return Status{}, fmt.Errorf("reconcile server-confirmed usage: %w", err)
+		}
+	}
+	awaitingSynchronization := d.synchronizationSource != nil && activeGraphicalSessionID != "" &&
+		(!hasConfirmedState || confirmedState.SessionID != activeGraphicalSessionID ||
+			confirmedState.LocalDate != localDate || confirmedState.Revision < snapshot.Revision)
+	var decision policy.Decision
+	if awaitingSynchronization {
+		decision = policy.Decision{
+			Allowed: true, Reason: policy.ReasonAwaitingSynchronization,
+		}
+	} else {
+		decision, err = d.evaluate(ctx, snapshot, now)
+		if err != nil {
+			return Status{}, err
+		}
 	}
 	if !decision.Allowed && d.lastShouldCount {
 		if err := d.tracker.Flush(ctx, now); err != nil {
@@ -128,9 +170,10 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	}
 	status := Status{
 		Decision: decision, GraphicalSession: len(graphical) != 0,
-		UsageSeconds: d.tracker.Seconds(),
+		AwaitingSynchronization: awaitingSynchronization,
+		UsageSeconds:            d.tracker.Seconds(),
 	}
-	if len(graphical) != 0 {
+	if len(graphical) != 0 && !awaitingSynchronization {
 		status.DueAlerts, err = alert.DueAlerts(decision, snapshot.WarningMinutes, d.lastAt, now)
 		if err != nil {
 			return Status{}, fmt.Errorf("calculate due alerts: %w", err)
@@ -142,23 +185,80 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	d.lastShouldCount = decision.ShouldCount
 	d.lastHadSession = len(graphical) != 0
 	d.lastCountUntil = decision.NextBlockAt
+	if awaitingSynchronization {
+		for _, current := range graphical {
+			if current.State == "active" && !d.allowedSessions[current.ID] {
+				if _, observed := d.blockedActiveAt[current.ID]; !observed {
+					d.blockedActiveAt[current.ID] = now
+				}
+			}
+		}
+		return status, nil
+	}
 
 	if decision.Allowed {
 		for sessionID := range d.terminated {
 			delete(d.terminated, sessionID)
+		}
+		for _, current := range graphical {
+			if current.State == "active" {
+				d.allowedSessions[current.ID] = true
+			}
+			delete(d.blockedActiveAt, current.ID)
 		}
 	} else {
 		for _, current := range graphical {
 			if d.terminated[current.ID] {
 				continue
 			}
-			if err := d.sessions.Terminate(ctx, current.ID); err != nil {
+			if !d.allowedSessions[current.ID] {
+				if current.State != "active" {
+					continue
+				}
+				activeSince, observed := d.blockedActiveAt[current.ID]
+				if !observed {
+					d.blockedActiveAt[current.ID] = now
+				}
+				if !observed {
+					continue
+				}
+				if now.Sub(activeSince) < blockedReloginStabilization {
+					continue
+				}
+			} else if current.State != "active" {
+				continue
+			}
+			if err := d.sessions.Logout(ctx, current); err != nil {
 				return status, err
 			}
 			d.terminated[current.ID] = true
 		}
 	}
 	return status, nil
+}
+
+// forgetSessionsNoLongerPresent prevents a reused logind session ID from
+// inheriting the enforcement state of an older session.
+func (d *Daemon) forgetSessionsNoLongerPresent(graphical []session.Session) {
+	present := make(map[string]bool, len(graphical))
+	for _, current := range graphical {
+		present[current.ID] = true
+	}
+	for sessionID := range d.terminated {
+		if !present[sessionID] {
+			delete(d.terminated, sessionID)
+		}
+	}
+	for sessionID := range d.allowedSessions {
+		if !present[sessionID] {
+			delete(d.allowedSessions, sessionID)
+		}
+	}
+	for sessionID := range d.blockedActiveAt {
+		if !present[sessionID] {
+			delete(d.blockedActiveAt, sessionID)
+		}
+	}
 }
 
 // Flush persists the final in-memory counter during an orderly shutdown.
@@ -206,11 +306,12 @@ func (d *Daemon) Run(ctx context.Context, tick time.Duration, logger *log.Logger
 				logger.Printf("desktop alert failed kind=%s: %v", dueAlert.Kind, err)
 			}
 		}
-		summary := fmt.Sprintf("%s:%t", status.Decision.Reason, status.GraphicalSession)
+		summary := fmt.Sprintf("%s:%t:%t", status.Decision.Reason, status.GraphicalSession,
+			status.AwaitingSynchronization)
 		if summary != lastSummary {
-			logger.Printf("decision=%s session=%t usage_seconds=%d remaining_seconds=%d",
-				status.Decision.Reason, status.GraphicalSession, status.UsageSeconds,
-				int64(status.Decision.Remaining/time.Second))
+			logger.Printf("decision=%s session=%t awaiting_synchronization=%t usage_seconds=%d remaining_seconds=%d",
+				status.Decision.Reason, status.GraphicalSession, status.AwaitingSynchronization,
+				status.UsageSeconds, int64(status.Decision.Remaining/time.Second))
 			lastSummary = summary
 		}
 	}
@@ -261,19 +362,35 @@ func (d *Daemon) addElapsed(ctx context.Context, elapsed time.Duration, now time
 }
 
 func (d *Daemon) evaluate(ctx context.Context, snapshot storage.PolicySnapshot, now time.Time) (policy.Decision, error) {
-	bonus, err := d.store.TotalBonusSeconds(ctx, d.trackerDate)
-	if err != nil {
-		return policy.Decision{}, fmt.Errorf("load daily bonus: %w", err)
-	}
 	monitoring := policy.MonitoringActive
 	if snapshot.MonitoringPaused {
 		monitoring = policy.MonitoringPaused
 	}
 	input := policy.Input{
 		Now: now, Monitoring: monitoring, ManualBlock: snapshot.ManualBlock,
-		Quota:    policy.WeeklyQuota(snapshot.WeeklyQuota),
-		Consumed: time.Duration(d.tracker.Seconds()) * time.Second,
-		Bonus:    time.Duration(bonus) * time.Second,
+	}
+	if d.synchronizationSource == nil {
+		bonus, err := d.store.TotalBonusSeconds(ctx, d.trackerDate)
+		if err != nil {
+			return policy.Decision{}, fmt.Errorf("load daily bonus: %w", err)
+		}
+		input.Quota = policy.WeeklyQuota(snapshot.WeeklyQuota)
+		input.Consumed = time.Duration(d.tracker.Seconds()) * time.Second
+		input.Bonus = time.Duration(bonus) * time.Second
+	} else {
+		confirmedState, available := d.store.CurrentConfirmedSessionState()
+		remainingSeconds := int64(0)
+		if available && confirmedState.LocalDate == d.trackerDate {
+			usageSinceConfirmation := d.tracker.Seconds() - confirmedState.UsageSeconds
+			if usageSinceConfirmation < 0 {
+				usageSinceConfirmation = 0
+			}
+			remainingSeconds = confirmedState.RemainingSeconds - usageSinceConfirmation
+			if remainingSeconds < 0 {
+				remainingSeconds = 0
+			}
+		}
+		input.Quota[now.Weekday()] = time.Duration(remainingSeconds) * time.Second
 	}
 	for _, routine := range snapshot.Routines {
 		if routine.Enabled {
@@ -287,6 +404,15 @@ func (d *Daemon) evaluate(ctx context.Context, snapshot storage.PolicySnapshot, 
 		return policy.Decision{}, fmt.Errorf("evaluate policy: %w", err)
 	}
 	return decision, nil
+}
+
+func establishedGraphicalSessionID(sessions []session.Session) string {
+	for _, current := range sessions {
+		if current.State == "active" {
+			return current.BalanceAuthorizationID()
+		}
+	}
+	return ""
 }
 
 func graphicalSessions(sessions []session.Session) []session.Session {

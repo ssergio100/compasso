@@ -1,9 +1,9 @@
-# O origin fica acessível somente ao cloudflared na própria máquina.
-listen_address = "127.0.0.1:8080"
+# A imagem Docker pode receber conexões pela rede configurada pelo Compose.
+listen_address = "0.0.0.0:8080"
 database_path = "/var/lib/tempo-server/tempo-server.db"
-assets_directory = "/usr/share/tempo-server/web"
 online_timeout = "60s"
 session_lifetime = "8h"
 
-# Obrigatório quando o painel público usa HTTPS.
+# Exemplo para uma implantação HTTPS com frontend e API em origens diferentes.
 secure_cookies = true
+admin_origin = "https://admin.example.com"

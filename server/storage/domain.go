@@ -20,13 +20,15 @@ type Admin struct {
 }
 
 type Device struct {
-	ID                    string
-	Name                  string
-	LastSeenAt            *time.Time
-	PolicyRevision        int64
-	AppliedPolicyRevision int64
-	CreatedAt             time.Time
-	Online                bool
+	ID                     string
+	Name                   string
+	LastSeenAt             *time.Time
+	PolicyRevision         int64
+	AppliedPolicyRevision  int64
+	GraphicalSessionActive bool
+	GraphicalSessionID     string
+	CreatedAt              time.Time
+	Online                 bool
 }
 
 type Policy struct {
@@ -67,24 +69,40 @@ func (s *Store) BootstrapAdmin(ctx context.Context, login, passwordHash string, 
 	if login == "" || passwordHash == "" || now.IsZero() {
 		return false, errors.New("bootstrap admin requires login, password hash and time")
 	}
+	id, err := newID()
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin administrator setup: %w", err)
+	}
+	defer tx.Rollback()
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
 		return false, fmt.Errorf("count administrators: %w", err)
 	}
 	if count != 0 {
 		return false, nil
 	}
-	id, err := newID()
-	if err != nil {
-		return false, err
-	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO admin_user(id, login, password_hash, active, created_at, updated_at)
 		VALUES (?, ?, ?, 1, ?, ?)`, id, login, passwordHash, formatTime(now), formatTime(now))
 	if err != nil {
 		return false, fmt.Errorf("bootstrap administrator: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit administrator setup: %w", err)
+	}
 	return true, nil
+}
+
+func (s *Store) HasAdministrators(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
+		return false, fmt.Errorf("count administrators: %w", err)
+	}
+	return count != 0, nil
 }
 
 func (s *Store) AdminByLogin(ctx context.Context, login string) (Admin, error) {
@@ -144,7 +162,9 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device ORDER BY name, id`)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision,
+		       graphical_session_active, graphical_session_id, created_at
+		FROM device ORDER BY name, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
@@ -153,10 +173,15 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	for rows.Next() {
 		var device Device
 		var lastSeen sql.NullString
+		var graphicalSessionID sql.NullString
+		var graphicalSessionActive int
 		var created string
-		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+			&device.AppliedPolicyRevision, &graphicalSessionActive, &graphicalSessionID, &created); err != nil {
 			return nil, err
 		}
+		device.GraphicalSessionActive = graphicalSessionActive != 0
+		device.GraphicalSessionID = graphicalSessionID.String
 		device.CreatedAt, err = parseTime(created)
 		if err != nil {
 			return nil, err
@@ -176,10 +201,15 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, error) {
 	var device Device
 	var lastSeen sql.NullString
+	var graphicalSessionID sql.NullString
+	var graphicalSessionActive int
 	var created string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device WHERE id=?`, id,
-	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision,
+		       graphical_session_active, graphical_session_id, created_at
+		FROM device WHERE id=?`, id,
+	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+		&device.AppliedPolicyRevision, &graphicalSessionActive, &graphicalSessionID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, Policy{}, ErrNotFound
 	}
@@ -187,6 +217,8 @@ func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, erro
 		return Device{}, Policy{}, err
 	}
 	device.CreatedAt, _ = parseTime(created)
+	device.GraphicalSessionActive = graphicalSessionActive != 0
+	device.GraphicalSessionID = graphicalSessionID.String
 	if lastSeen.Valid {
 		value, parseErr := parseTime(lastSeen.String)
 		if parseErr != nil {
@@ -408,6 +440,28 @@ func (s *Store) LoadDailySummary(ctx context.Context, deviceID, localDate string
 		return DailySummary{}, fmt.Errorf("load daily summary: %w", err)
 	}
 	return summary, nil
+}
+
+// LatestHeartbeatLocalDate returns the controlled computer's local date from
+// its most recent heartbeat. An empty result means the device has never sent a
+// usage sample.
+func (s *Store) LatestHeartbeatLocalDate(ctx context.Context, deviceID string) (string, error) {
+	var localDate string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT local_date FROM daily_usage
+		WHERE device_id=? ORDER BY last_sync_at DESC LIMIT 1`, deviceID,
+	).Scan(&localDate)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load latest heartbeat local date: %w", err)
+	}
+	parsedDate, err := time.Parse("2006-01-02", localDate)
+	if err != nil || parsedDate.Format("2006-01-02") != localDate {
+		return "", fmt.Errorf("stored heartbeat local date is invalid: %q", localDate)
+	}
+	return localDate, nil
 }
 
 func (s *Store) InsertAudit(ctx context.Context, deviceID, kind string, payload interface{}, now time.Time) error {

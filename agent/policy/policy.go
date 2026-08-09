@@ -20,11 +20,12 @@ const (
 type Reason string
 
 const (
-	ReasonAllowed     Reason = "allowed"
-	ReasonPaused      Reason = "monitoring_paused"
-	ReasonManualBlock Reason = "manual_block"
-	ReasonRoutine     Reason = "routine"
-	ReasonQuota       Reason = "quota_exhausted"
+	ReasonAllowed                 Reason = "allowed"
+	ReasonPaused                  Reason = "monitoring_paused"
+	ReasonManualBlock             Reason = "manual_block"
+	ReasonRoutine                 Reason = "routine"
+	ReasonQuota                   Reason = "quota_exhausted"
+	ReasonAwaitingSynchronization Reason = "awaiting_synchronization"
 )
 
 // WeeklyQuota stores the allowed duration for each weekday. time.Weekday is

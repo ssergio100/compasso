@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,6 +21,47 @@ import (
 	serverstorage "github.com/sergio/compasso/server/storage"
 	"github.com/sergio/compasso/server/web"
 )
+
+func TestRunReportsSuccessfulSynchronization(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})}}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported := make(chan error, 1)
+	client.SetStatusReporter(func(synchronizationError error) {
+		reported <- synchronizationError
+		cancel()
+	})
+	finished := make(chan error, 1)
+	go func() {
+		finished <- client.Run(ctx, log.New(io.Discard, "", 0))
+	}()
+	select {
+	case synchronizationError := <-reported:
+		if synchronizationError != nil {
+			t.Fatalf("reported synchronization error=%v", synchronizationError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successful synchronization was not reported")
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	ctx := context.Background()
@@ -44,7 +87,7 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	application, err := web.NewWithAssets(serverStore, false, time.Hour, "../../server/web")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +115,9 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	if _, err := client.Heartbeat(ctx, now); err != nil {
 		t.Fatal(err)
 	}
+	if client.SuccessfulHeartbeatCount() != 1 {
+		t.Fatalf("successful heartbeat count=%d, want 1", client.SuccessfulHeartbeatCount())
+	}
 	localPolicy, err := agentStore.LoadPolicy(ctx)
 	if err != nil || localPolicy.Revision != 10 {
 		t.Fatalf("initial revision=%d err=%v", localPolicy.Revision, err)
@@ -85,6 +131,9 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 	if _, err := client.Heartbeat(ctx, now.Add(21*time.Second)); err != nil {
 		t.Fatal(err)
+	}
+	if client.SuccessfulHeartbeatCount() != 2 {
+		t.Fatalf("successful heartbeat count=%d, want 2", client.SuccessfulHeartbeatCount())
 	}
 	localPolicy, err = agentStore.LoadPolicy(ctx)
 	if err != nil || localPolicy.Revision != 11 || localPolicy.WeeklyQuota[time.Monday] != time.Minute {
@@ -107,6 +156,9 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	atomic.StoreUint32(&online, 0)
 	if _, err := client.Heartbeat(ctx, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("offline heartbeat unexpectedly succeeded")
+	}
+	if client.SuccessfulHeartbeatCount() != 2 {
+		t.Fatal("failed heartbeat advanced the successful synchronization count")
 	}
 	tracker, err := agentstorage.NewUsageTracker(ctx, agentStore, "2026-08-10", 5*time.Second)
 	if err != nil {
@@ -160,6 +212,92 @@ func TestTransportErrorsRedactDeviceToken(t *testing.T) {
 	}
 }
 
+func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	serverStore, err := serverstorage.Open(ctx, filepath.Join(t.TempDir(), "server.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverStore.Close()
+	device, err := serverStore.CreateDevice(ctx, "Anchored balance", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := serverStore.IssueDeviceToken(ctx, device.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quotas [7]int64
+	quotas[now.Weekday()] = 600
+	if err := serverStore.SaveQuotas(ctx, device.ID, quotas, 1, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	client, err := New(agentStore, &http.Client{Transport: handlerTransport{handler: application}}, Config{
+		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token,
+		HeartbeatInterval: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetGraphicalSession(true, "session-7")
+	first, err := client.Heartbeat(ctx, now.Add(2*time.Second))
+	if err != nil || first.SessionState == nil || first.SessionState.RemainingSeconds != 600 {
+		t.Fatalf("initial session state=%+v err=%v", first.SessionState, err)
+	}
+	initialAnchor, available := agentStore.CurrentConfirmedSessionState()
+	if !available || initialAnchor.SessionID != "session-7" || initialAnchor.RemainingSeconds != 600 {
+		t.Fatalf("stored initial anchor=%+v available=%t", initialAnchor, available)
+	}
+	if err := agentStore.CheckpointUsage(ctx, agentstorage.DailyUsage{
+		LocalDate: now.Format("2006-01-02"), SecondsUsed: 1, CheckpointAt: now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := client.Heartbeat(ctx, now.Add(4*time.Second))
+	if err != nil || unchanged.SessionState != nil {
+		t.Fatalf("unchanged heartbeat unexpectedly reset anchor=%+v err=%v", unchanged.SessionState, err)
+	}
+	afterUnchanged, _ := agentStore.CurrentConfirmedSessionState()
+	if afterUnchanged != initialAnchor {
+		t.Fatalf("unchanged heartbeat changed anchor: before=%+v after=%+v", initialAnchor, afterUnchanged)
+	}
+
+	if err := serverStore.QueueRemoteBonus(ctx, device.ID, now.Format("2006-01-02"), 300, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := client.Heartbeat(ctx, now.Add(6*time.Second))
+	if err != nil || changed.SessionState == nil || changed.SessionState.RemainingSeconds != 899 {
+		t.Fatalf("bonus session state=%+v err=%v", changed.SessionState, err)
+	}
+	bonusAnchor, _ := agentStore.CurrentConfirmedSessionState()
+	if bonusAnchor.RemainingSeconds != 899 || bonusAnchor.Revision <= initialAnchor.Revision {
+		t.Fatalf("bonus did not create a new anchor: initial=%+v bonus=%+v", initialAnchor, bonusAnchor)
+	}
+	unchangedAgain, err := client.Heartbeat(ctx, now.Add(7*time.Second))
+	if err != nil || unchangedAgain.SessionState != nil {
+		t.Fatalf("post-bonus heartbeat reset anchor=%+v err=%v", unchangedAgain.SessionState, err)
+	}
+
+	client.SetGraphicalSession(false, "")
+	if _, err := client.Heartbeat(ctx, now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	storedDevice, _, err := serverStore.LoadDevice(ctx, device.ID)
+	if err != nil || storedDevice.GraphicalSessionActive || storedDevice.GraphicalSessionID != "" {
+		t.Fatalf("server graphical presence=%+v err=%v", storedDevice, err)
+	}
+}
+
 func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
@@ -188,7 +326,7 @@ func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
 	if err := serverStore.SetLocalPassword(ctx, device.ID, oldVerifier, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	application, err := web.NewWithAssets(serverStore, false, time.Hour, "../../server/web")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}

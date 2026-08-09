@@ -101,8 +101,16 @@ func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) 
 
 func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request protocol.HeartbeatRequest, now time.Time) (protocol.HeartbeatResponse, error) {
 	const maximumDailyUsageSeconds = int64((48 * time.Hour) / time.Second)
-	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.SecondsUsed < 0 || request.SecondsUsed > maximumDailyUsageSeconds || now.IsZero() {
+	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.SessionStateRevision < 0 ||
+		request.SecondsUsed < 0 || request.SecondsUsed > maximumDailyUsageSeconds || now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("invalid heartbeat counters")
+	}
+	if request.GraphicalSessionActive {
+		if !validOpaqueIdentifier(request.GraphicalSessionID) {
+			return protocol.HeartbeatResponse{}, errors.New("active graphical session requires a valid identifier")
+		}
+	} else if request.GraphicalSessionID != "" || request.RequestSessionState {
+		return protocol.HeartbeatResponse{}, errors.New("inactive graphical session cannot request session state")
 	}
 	parsedDate, err := time.Parse("2006-01-02", request.LocalDate)
 	if err != nil || parsedDate.Format("2006-01-02") != request.LocalDate {
@@ -123,13 +131,15 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 	} else if err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
-	if request.PolicyRevision > serverRevision {
+	if request.PolicyRevision > serverRevision || request.SessionStateRevision > serverRevision {
 		return protocol.HeartbeatResponse{}, fmt.Errorf("%w: client=%d server=%d", ErrRevisionAhead, request.PolicyRevision, serverRevision)
 	}
 	stamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE device SET last_seen_at=?, applied_policy_revision=?, updated_at=? WHERE id=?`,
-		stamp, request.PolicyRevision, stamp, deviceID); err != nil {
+		UPDATE device SET last_seen_at=?, applied_policy_revision=?,
+			graphical_session_active=?, graphical_session_id=?, updated_at=? WHERE id=?`,
+		stamp, request.PolicyRevision, boolInt(request.GraphicalSessionActive),
+		nullableSessionID(request.GraphicalSessionActive, request.GraphicalSessionID), stamp, deviceID); err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -169,6 +179,15 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		}
 		converted := policyForAPI(policy)
 		response.Policy = &converted
+	}
+	if request.GraphicalSessionActive &&
+		(request.RequestSessionState || request.SessionStateRevision < serverRevision) {
+		state, err := s.confirmedSessionState(ctx, deviceID, request.GraphicalSessionID,
+			request.LocalDate, now)
+		if err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+		response.SessionState = &state
 	}
 	response.Commands, err = s.pendingCommands(ctx, deviceID, 100)
 	if err != nil {
@@ -333,6 +352,9 @@ func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID, localDate string
 	if _, err := tx.ExecContext(ctx, `INSERT INTO bonus(uuid, device_id, local_date, seconds, origin, created_at) VALUES (?, ?, ?, ?, 'web', ?)`, uuid, deviceID, localDate, seconds, stamp); err != nil {
 		return err
 	}
+	if _, err := bumpPolicyKeepWarning(ctx, tx, deviceID, now); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, 'add_bonus', ?, ?)`, uuid, deviceID, string(payload), stamp); err != nil {
 		return err
 	}
@@ -340,4 +362,41 @@ func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID, localDate string
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) confirmedSessionState(
+	ctx context.Context,
+	deviceID string,
+	sessionID string,
+	localDate string,
+	now time.Time,
+) (protocol.SessionState, error) {
+	policy, err := s.loadPolicy(ctx, deviceID)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	summary, err := s.LoadDailySummary(ctx, deviceID, localDate)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	parsedDate, err := time.Parse("2006-01-02", localDate)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	remaining := policy.WeeklyQuota[parsedDate.Weekday()] + summary.BonusSeconds - summary.UsedSeconds
+	if remaining < 0 {
+		remaining = 0
+	}
+	return protocol.SessionState{
+		Revision: policy.Revision, SessionID: sessionID, LocalDate: localDate,
+		RemainingSeconds: remaining, UsageSeconds: summary.UsedSeconds,
+		ConfirmedAt: now.UTC(),
+	}, nil
+}
+
+func nullableSessionID(active bool, sessionID string) interface{} {
+	if !active {
+		return nil
+	}
+	return sessionID
 }

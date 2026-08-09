@@ -12,6 +12,9 @@ Restart=on-failure
 RestartSec=2s
 StateDirectory=tempo-agent
 StateDirectoryMode=0700
+RuntimeDirectory=tempo-agent
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
 UMask=0077
 
 # O agente precisa de rede, D-Bus e logind, mas não precisa modificar o sistema.

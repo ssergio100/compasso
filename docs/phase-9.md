@@ -13,8 +13,9 @@
   dispositivos, kernel, namespaces e diretório pessoal;
 - servidor Docker não-root, sem capabilities, filesystem somente leitura e
   porta publicada apenas no loopback do host;
-- senha inicial do administrador disponível por Docker secret, sem argumento
-  de linha de comando;
+- como implementação intermediária, a senha inicial do administrador esteve
+  disponível por Docker secret; o pacote atual cria o primeiro acesso somente
+  depois da instalação, pela interface;
 - exemplos separados de servidor Docker e Cloudflare Tunnel para
   `apicompasso.smresume.com` e `admcompasso.smresume.com`.
 
@@ -48,7 +49,7 @@ inicia o servidor e não conflita com a porta 8080 usada pelo qBittorrent:
 
 ```bash
 cd /home/sergio/projetos/compasso
-docker compose -f compose.production.yml build
+docker compose build compasso-api
 ```
 
 ## Instalação segura do agente no Zorin
