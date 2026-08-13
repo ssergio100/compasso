@@ -23,6 +23,25 @@ type Config struct {
 	DeviceID          string
 	DeviceToken       string
 	HeartbeatInterval time.Duration
+	AttemptTimeout    time.Duration
+}
+
+const repeatedFailureLogInterval = time.Minute
+
+type heartbeatError struct {
+	stage string
+	err   error
+}
+
+func (e *heartbeatError) Error() string { return e.err.Error() }
+func (e *heartbeatError) Unwrap() error { return e.err }
+
+func heartbeatErrorStage(err error) string {
+	var failure *heartbeatError
+	if errors.As(err, &failure) {
+		return failure.stage
+	}
+	return "unknown"
 }
 
 type Client struct {
@@ -71,7 +90,8 @@ func New(store *storage.Store, httpClient *http.Client, config Config) (*Client,
 	if store == nil || httpClient == nil {
 		return nil, errors.New("store and HTTP client are required")
 	}
-	if config.ServerURL == "" || config.DeviceID == "" || config.DeviceToken == "" || config.HeartbeatInterval <= 0 {
+	if config.ServerURL == "" || config.DeviceID == "" || config.DeviceToken == "" ||
+		config.HeartbeatInterval <= 0 || config.AttemptTimeout <= 0 {
 		return nil, errors.New("complete synchronization configuration is required")
 	}
 	config.ServerURL = strings.TrimRight(config.ServerURL, "/")
@@ -102,9 +122,14 @@ func (c *Client) graphicalSession() (bool, string, bool) {
 // Heartbeat performs one cycle. Durable events are removed only when their
 // identifiers are explicitly acknowledged by the server.
 func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.HeartbeatResponse, err error) {
+	stage := "local_state"
 	defer func() {
 		if err != nil {
 			c.setRemoteControl(false, false, false, 0)
+			var classified *heartbeatError
+			if !errors.As(err, &classified) {
+				err = &heartbeatError{stage: stage, err: err}
+			}
 		}
 	}()
 	if now.IsZero() {
@@ -151,13 +176,14 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 		confirmedState.Revision < revision)
 	for _, event := range pending {
 		if !json.Valid([]byte(event.PayloadJSON)) {
-			_ = c.store.IncrementEventRetry(ctx, event.UUID)
+			_ = c.store.IncrementEventRetries(ctx, []string{event.UUID})
 			return protocol.HeartbeatResponse{}, fmt.Errorf("pending event %s contains invalid JSON", event.UUID)
 		}
 		request.Events = append(request.Events, protocol.PendingEvent{
 			UUID: event.UUID, Kind: event.Kind, Payload: json.RawMessage(event.PayloadJSON), CreatedAt: event.CreatedAt,
 		})
 	}
+	stage = "request"
 	body, err := json.Marshal(request)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -169,12 +195,15 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+c.config.DeviceToken)
 	httpRequest.Header.Set("X-Tempo-Device-ID", c.config.DeviceID)
+	stage = "transport"
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
+		c.http.CloseIdleConnections()
 		c.recordRetries(ctx, pending)
 		return protocol.HeartbeatResponse{}, fmt.Errorf("send heartbeat: %s", redactSensitiveText(err.Error(), c.config.DeviceToken))
 	}
 	defer response.Body.Close()
+	stage = "response"
 	if response.StatusCode != http.StatusOK {
 		failure := decodeHeartbeatError(response.StatusCode, response.Body)
 		c.recordRetries(ctx, pending)
@@ -185,6 +214,7 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 		c.recordRetries(ctx, pending)
 		return protocol.HeartbeatResponse{}, err
 	}
+	stage = "apply"
 	c.setRemoteControl(true, result.Control.MonitoringPaused, result.Control.ManualBlock, result.Control.Revision)
 	for _, eventID := range result.AcknowledgedEvents {
 		if err := c.store.AcknowledgeEvent(ctx, eventID); err != nil {
@@ -296,9 +326,14 @@ func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now
 }
 
 func (c *Client) recordRetries(ctx context.Context, events []storage.PendingEvent) {
-	for _, event := range events {
-		_ = c.store.IncrementEventRetry(ctx, event.UUID)
+	if len(events) == 0 {
+		return
 	}
+	ids := make([]string, len(events))
+	for index, event := range events {
+		ids[index] = event.UUID
+	}
+	_ = c.store.IncrementEventRetries(ctx, ids)
 }
 
 func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
@@ -306,9 +341,16 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		logger = log.Default()
 	}
 	delay := time.Duration(0)
-	backoff := time.Second
+	initialBackoff := time.Second
+	if c.config.HeartbeatInterval < initialBackoff {
+		initialBackoff = c.config.HeartbeatInterval
+	}
+	backoff := initialBackoff
 	online := false
 	first := true
+	attempts := 0
+	var offlineSince time.Time
+	var lastFailureLog time.Time
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -319,14 +361,37 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 			case <-timer.C:
 			}
 		}
-		_, err := c.Heartbeat(ctx, c.now())
+		attemptStarted := time.Now()
+		attemptContext, cancelAttempt := context.WithTimeout(ctx, c.config.AttemptTimeout)
+		_, err := c.Heartbeat(attemptContext, c.now())
+		cancelAttempt()
+		attemptFinished := time.Now()
+		attemptDuration := attemptFinished.Sub(attemptStarted)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			attempts++
 			if online || first {
-				logger.Printf("synchronization offline: %v", err)
+				offlineSince = attemptFinished
+				lastFailureLog = attemptFinished
+				logger.Printf("synchronization offline stage=%s attempt=%d duration=%s: %v",
+					heartbeatErrorStage(err), attempts, attemptDuration.Round(time.Millisecond), err)
 				c.reportStatus(err)
+			} else if attemptFinished.Sub(lastFailureLog) >= repeatedFailureLogInterval {
+				lastFailureLog = attemptFinished
+				logger.Printf("synchronization still offline stage=%s attempts=%d offline_for=%s last_attempt=%s: %v",
+					heartbeatErrorStage(err), attempts, attemptFinished.Sub(offlineSince).Round(time.Second),
+					attemptDuration.Round(time.Millisecond), err)
 			}
 			online, first = false, false
-			delay = backoff
+			// Keep retry cadence measured from the start of the failed attempt.
+			// A request that consumed its whole timeout must not add another full
+			// backoff before the next try.
+			delay = backoff - attemptDuration
+			if delay < 0 {
+				delay = 0
+			}
 			backoff *= 2
 			if backoff > c.config.HeartbeatInterval {
 				backoff = c.config.HeartbeatInterval
@@ -334,11 +399,19 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 			continue
 		}
 		if !online {
-			logger.Printf("synchronization online")
+			if attempts == 0 {
+				logger.Printf("synchronization online")
+			} else {
+				logger.Printf("synchronization online attempts=%d offline_for=%s",
+					attempts, attemptFinished.Sub(offlineSince).Round(time.Second))
+			}
 			c.reportStatus(nil)
 		}
 		online, first = true, false
-		backoff = time.Second
+		attempts = 0
+		offlineSince = time.Time{}
+		lastFailureLog = time.Time{}
+		backoff = initialBackoff
 		delay = c.config.HeartbeatInterval
 	}
 }

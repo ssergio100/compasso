@@ -247,7 +247,7 @@ func TestOfflineBonusAndEventSurviveRestartAndPolicyReplacement(t *testing.T) {
 	if len(events) != 1 || events[0].UUID != bonus.UUID {
 		t.Fatalf("pending events after restart = %+v, want one bonus event", events)
 	}
-	if err := store.IncrementEventRetry(ctx, bonus.UUID); err != nil {
+	if err := store.IncrementEventRetries(ctx, []string{bonus.UUID}); err != nil {
 		t.Fatal(err)
 	}
 	events, err = store.PendingEvents(ctx, 10)
@@ -330,6 +330,28 @@ func TestConfirmedSessionStatePersistsAndPreservesInFlightLocalBonus(t *testing.
 	usage, err := store.LoadDailyUsage(ctx, initial.LocalDate)
 	if err != nil || usage.SecondsUsed != 20 {
 		t.Fatalf("reconciled usage=%+v err=%v", usage, err)
+	}
+}
+
+func TestStoreOperationTimesOutWhileConnectionIsBusyAndRecovers(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "agent.db"))
+	defer store.Close()
+
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeoutContext, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := store.LoadDailyUsage(timeoutContext, "2026-08-10"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy database error=%v, want deadline exceeded", err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadDailyUsage(ctx, "2026-08-10"); err != nil {
+		t.Fatalf("database did not recover after releasing the connection: %v", err)
 	}
 }
 

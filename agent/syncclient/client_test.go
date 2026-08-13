@@ -1,11 +1,11 @@
 package syncclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +22,7 @@ import (
 	"github.com/ssergio100/compasso/server/web"
 )
 
-func TestRunReportsSuccessfulSynchronization(t *testing.T) {
+func TestRunTimesOutStalledAttemptAndReconnects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
@@ -30,36 +30,58 @@ func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer agentStore.Close()
-	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
-	})}}
+	transport := &recoveryTransport{}
+	httpClient := &http.Client{Transport: transport}
 	client, err := New(agentStore, httpClient, Config{
 		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
-		HeartbeatInterval: time.Second,
+		HeartbeatInterval: 5 * time.Millisecond, AttemptTimeout: 20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reported := make(chan error, 1)
+	reported := make(chan error, 2)
 	client.SetStatusReporter(func(synchronizationError error) {
 		reported <- synchronizationError
-		cancel()
+		if synchronizationError == nil {
+			cancel()
+		}
 	})
+	var output bytes.Buffer
 	finished := make(chan error, 1)
 	go func() {
-		finished <- client.Run(ctx, log.New(io.Discard, "", 0))
+		finished <- client.Run(ctx, log.New(&output, "", 0))
 	}()
-	select {
-	case synchronizationError := <-reported:
-		if synchronizationError != nil {
-			t.Fatalf("reported synchronization error=%v", synchronizationError)
+	for expectedOffline := true; ; expectedOffline = false {
+		select {
+		case synchronizationError := <-reported:
+			if expectedOffline && synchronizationError == nil {
+				t.Fatal("stalled attempt was not reported offline")
+			}
+			if !expectedOffline && synchronizationError != nil {
+				t.Fatalf("recovery reported error=%v", synchronizationError)
+			}
+			if !expectedOffline {
+				goto recovered
+			}
+		case <-time.After(time.Second):
+			t.Fatal("synchronization did not recover after the stalled attempt")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("successful synchronization was not reported")
 	}
+
+recovered:
 	if err := <-finished; err != nil {
 		t.Fatal(err)
+	}
+	if attempts := atomic.LoadUint32(&transport.attempts); attempts != 2 {
+		t.Fatalf("transport attempts=%d, want 2", attempts)
+	}
+	if closes := atomic.LoadUint32(&transport.idleCloses); closes != 1 {
+		t.Fatalf("idle connection closes=%d, want 1", closes)
+	}
+	logs := output.String()
+	if !strings.Contains(logs, "offline stage=transport attempt=1") ||
+		!strings.Contains(logs, "online attempts=1") {
+		t.Fatalf("unexpected synchronization logs: %s", logs)
 	}
 }
 
@@ -136,7 +158,8 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 	defer agentStore.Close()
 	client, err := New(agentStore, httpClient, Config{
-		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token, HeartbeatInterval: 10 * time.Second,
+		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +244,7 @@ func TestTransportErrorsRedactDeviceToken(t *testing.T) {
 	httpClient := &http.Client{Transport: failingTransport{failure: fmt.Errorf("failed Authorization: Bearer %s", deviceToken)}}
 	client, err := New(agentStore, httpClient, Config{
 		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: deviceToken,
-		HeartbeatInterval: 10 * time.Second,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +287,7 @@ func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) 
 	defer agentStore.Close()
 	client, err := New(agentStore, &http.Client{Transport: handlerTransport{handler: application}}, Config{
 		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token,
-		HeartbeatInterval: 10 * time.Second,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -365,7 +388,7 @@ func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
 	defer agentStore.Close()
 	synchronizationClient, err := New(agentStore, httpClient, Config{
 		ServerURL: "http://tempo.test", DeviceID: device.ID,
-		DeviceToken: deviceToken, HeartbeatInterval: 10 * time.Second,
+		DeviceToken: deviceToken, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -414,6 +437,26 @@ func (transport handlerTransport) RoundTrip(request *http.Request) (*http.Respon
 	return recorder.Result(), nil
 }
 
+type recoveryTransport struct {
+	attempts   uint32
+	idleCloses uint32
+}
+
+func (transport *recoveryTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if atomic.AddUint32(&transport.attempts, 1) == 1 {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	}
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Content-Type", "application/json")
+	_, _ = recorder.Write([]byte(`{}`))
+	return recorder.Result(), nil
+}
+
+func (transport *recoveryTransport) CloseIdleConnections() {
+	atomic.AddUint32(&transport.idleCloses, 1)
+}
+
 type failingTransport struct{ failure error }
 
 func TestHeartbeatFailureDiscardsRemoteControl(t *testing.T) {
@@ -433,7 +476,8 @@ func TestHeartbeatFailureDiscardsRemoteControl(t *testing.T) {
 		_, _ = w.Write([]byte(`{"server_time":"2026-08-10T12:00:00Z","control":{"revision":2,"monitoring_paused":false,"manual_block":true}}`))
 	})}
 	client, err := New(store, &http.Client{Transport: transport}, Config{
-		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token", HeartbeatInterval: time.Second,
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

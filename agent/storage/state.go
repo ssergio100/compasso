@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -198,24 +199,37 @@ func (s *Store) AcknowledgeEvent(ctx context.Context, uuid string) error {
 	return nil
 }
 
-// IncrementEventRetry records an unsuccessful upload attempt without removing
-// the event from the durable queue.
-func (s *Store) IncrementEventRetry(ctx context.Context, uuid string) error {
-	if uuid == "" {
-		return errors.New("event UUID cannot be empty")
+// IncrementEventRetries records one unsuccessful batch upload in a single
+// database operation without removing events from the durable queue.
+func (s *Store) IncrementEventRetries(ctx context.Context, uuids []string) error {
+	if len(uuids) == 0 {
+		return nil
 	}
+	arguments := make([]interface{}, len(uuids))
+	seen := make(map[string]struct{}, len(uuids))
+	for index, uuid := range uuids {
+		if uuid == "" {
+			return errors.New("event UUID cannot be empty")
+		}
+		if _, duplicate := seen[uuid]; duplicate {
+			return fmt.Errorf("duplicate pending event %s", uuid)
+		}
+		seen[uuid] = struct{}{}
+		arguments[index] = uuid
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(uuids)), ",")
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE pending_event SET retry_count = retry_count + 1 WHERE uuid = ?`, uuid,
+		`UPDATE pending_event SET retry_count = retry_count + 1 WHERE uuid IN (`+placeholders+`)`, arguments...,
 	)
 	if err != nil {
-		return fmt.Errorf("increment event retry: %w", err)
+		return fmt.Errorf("increment event retries: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read event retry result: %w", err)
+		return fmt.Errorf("read event retry results: %w", err)
 	}
-	if changed == 0 {
-		return fmt.Errorf("pending event %s not found", uuid)
+	if changed != int64(len(uuids)) {
+		return fmt.Errorf("updated %d pending event retries, want %d", changed, len(uuids))
 	}
 	return nil
 }

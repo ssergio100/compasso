@@ -123,6 +123,7 @@ func run(configPath string, logger *log.Logger) error {
 	synchronizer, err := syncclient.New(store, &http.Client{Timeout: settings.HTTPTimeout}, syncclient.Config{
 		ServerURL: settings.ServerURL, DeviceID: settings.DeviceID,
 		DeviceToken: settings.DeviceToken, HeartbeatInterval: settings.HeartbeatInterval,
+		AttemptTimeout: settings.HTTPTimeout,
 	})
 	if err != nil {
 		return err
