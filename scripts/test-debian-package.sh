@@ -67,10 +67,17 @@ if ! grep -Fq 'if [ -f /etc/tempo-agent/setup-complete ]' \
 	  echo "erro: postinst não distingue instalação nova de cliente configurado" >&2
 	  exit 1
 fi
-if grep -Fq 'rm -f /etc/tempo-agent/setup-complete' \
+if ! grep -Fq 'if [ -z "${2:-}" ]' \
+  "${temporary_directory}/control/postinst" || \
+   ! grep -Fq 'rm -f /etc/tempo-agent/setup-complete' \
   "${temporary_directory}/control/postinst"; then
-	  echo "erro: postinst apaga a confirmação durante atualização" >&2
-	  exit 1
+	  echo "erro: postinst não invalida configuração residual em instalação nova" >&2
+  exit 1
+fi
+if ! grep -Fq 'rm -f /var/lib/tempo-agent/tempo-agent.db' \
+  "${temporary_directory}/control/postinst"; then
+	  echo "erro: postinst não remove política residual em instalação nova" >&2
+  exit 1
 fi
 if ! grep -Fq 'systemctl restart tempo-agent.service' \
   "${temporary_directory}/control/postinst"; then
@@ -86,7 +93,6 @@ fi
 binary_paths=(
   usr/sbin/tempo-agent
   usr/sbin/tempo-agent-configure
-  usr/libexec/compasso-session-logout
 )
 for relative_binary_path in "${binary_paths[@]}"; do
   binary_path="${temporary_directory}/root/${relative_binary_path}"

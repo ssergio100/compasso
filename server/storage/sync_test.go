@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	protocol "github.com/sergio/compasso/protocol/v1"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
@@ -127,6 +127,40 @@ func TestCommandsRemainPendingUntilAcknowledged(t *testing.T) {
 	third, err := store.ReceiveHeartbeat(ctx, device.ID, request, now.Add(3*time.Second))
 	if err != nil || len(third.Commands) != 0 {
 		t.Fatalf("acknowledged command still pending: %+v err=%v", third.Commands, err)
+	}
+}
+
+func TestRemoteControlDoesNotBecomeOfflinePolicy(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.loadPolicy(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"block_now", "pause_monitoring"} {
+		if err := store.QueueControl(ctx, device.ID, command, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		after, err := store.loadPolicy(ctx, device.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Revision != before.Revision || after.ManualBlock || after.MonitoringPaused {
+			t.Fatalf("remote command %q changed offline policy: before=%+v after=%+v", command, before, after)
+		}
+	}
+	heartbeat, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: before.Revision, LocalDate: "2026-08-10",
+	}, now.Add(2*time.Second))
+	if err != nil || !heartbeat.Control.ManualBlock || !heartbeat.Control.MonitoringPaused {
+		t.Fatalf("heartbeat control=%+v err=%v", heartbeat.Control, err)
 	}
 }
 

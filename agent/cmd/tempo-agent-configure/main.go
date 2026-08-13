@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sergio/compasso/agent/config"
-	agentsetup "github.com/sergio/compasso/agent/setup"
-	"github.com/sergio/compasso/agent/syncstatus"
+	"github.com/ssergio100/compasso/agent/config"
+	agentsetup "github.com/ssergio100/compasso/agent/setup"
+	"github.com/ssergio100/compasso/agent/syncstatus"
 )
 
 const (

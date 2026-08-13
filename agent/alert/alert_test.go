@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/policy"
+	"github.com/ssergio100/compasso/agent/policy"
 )
 
 func TestDueAlertsReturnsCrossedRoutineThresholds(t *testing.T) {

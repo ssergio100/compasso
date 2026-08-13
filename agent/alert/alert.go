@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sergio/compasso/agent/policy"
+	"github.com/ssergio100/compasso/agent/policy"
 )
 
 const (

@@ -61,9 +61,7 @@ docker compose --project-directory "${project_directory}" up --detach --remove-o
 
 for attempt in {1..30}; do
   if docker compose --project-directory "${project_directory}" exec --no-TTY compasso-api \
-      curl --fail --silent "http://127.0.0.1:8080/healthz" >/dev/null \
-      && docker compose --project-directory "${project_directory}" exec --no-TTY compasso-admin-ui \
-      wget --quiet --output-document=/dev/null "http://127.0.0.1:8080/healthz"; then
+      curl --fail --silent "http://127.0.0.1:8080/healthz" >/dev/null; then
     break
   fi
   if [[ "${attempt}" -eq 30 ]]; then
@@ -76,6 +74,4 @@ done
 
 echo "Compasso instalado."
 echo "API: porta 8181 do servidor"
-echo "Painel: porta 8182 do servidor"
-echo "Abra o painel no navegador para criar o primeiro acesso administrativo."
-echo "Proxy, túnel, VPN, DNS e HTTPS são decisões independentes de infraestrutura."
+echo "A interface administrativa é implantada separadamente."

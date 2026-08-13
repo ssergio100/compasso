@@ -9,7 +9,6 @@ build-agent:
 	mkdir -p bin
 	go build -o bin/tempo-agent ./agent/cmd/tempo-agent
 	go build -o bin/tempo-agent-configure ./agent/cmd/tempo-agent-configure
-	go build -o bin/compasso-session-logout ./agent/cmd/compasso-session-logout
 
 build-agent-portable:
 	./scripts/build-portable-client-binaries.sh

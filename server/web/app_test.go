@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	protocol "github.com/sergio/compasso/protocol/v1"
-	serverstorage "github.com/sergio/compasso/server/storage"
+	"github.com/ssergio100/compasso/agent/localauth"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
+	serverstorage "github.com/ssergio100/compasso/server/storage"
 )
 
 type webFixture struct {
@@ -209,6 +209,13 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	var createdRoutine map[string]string
 	decodeResponse(t, routineResponse, &createdRoutine)
 	routineID := createdRoutine["id"]
+	conflictResponse := fixture.requestJSON(http.MethodPost, devicePath+"/routines", saveAdminRoutineRequest{
+		Name: "Leitura", Days: [7]bool{false, true, false, false, false, false, false},
+		Start: 23 * 3600, End: 23*3600 + 30*60, Enabled: true,
+	}, true)
+	if conflictResponse.Code != http.StatusConflict || !strings.Contains(conflictResponse.Body.String(), "Dormir") {
+		t.Fatalf("routine conflict status=%d body=%s", conflictResponse.Code, conflictResponse.Body.String())
+	}
 	updatedRoutineResponse := fixture.requestJSON(http.MethodPut, devicePath+"/routines/"+routineID, saveAdminRoutineRequest{
 		Name: "Dormir cedo", Days: [7]bool{false, true, true, true, true, true, false},
 		Start: 21 * 3600, End: 8 * 3600, Enabled: true,
@@ -257,7 +264,7 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	var detail adminDeviceDetailResponse
 	decodeResponse(t, detailResponse, &detail)
 	if detail.Policy.WeeklyQuota[time.Monday] != 3600 || detail.Policy.WarningMinutes != 5 ||
-		len(detail.Policy.Routines) != 1 || !detail.Policy.PasswordSet || !detail.Policy.MonitoringPaused {
+		len(detail.Policy.Routines) != 1 || !detail.Policy.PasswordSet || detail.Policy.MonitoringPaused {
 		t.Fatalf("unexpected device detail: %+v", detail)
 	}
 
@@ -265,7 +272,7 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	var liveStatus deviceLiveStatus
 	decodeResponse(t, statusResponse, &liveStatus)
 	if statusResponse.Code != http.StatusOK || liveStatus.LocalDate != "2026-08-10" ||
-		liveStatus.TodayQuotaSeconds != 3600 || liveStatus.RemainingSeconds != 4200 {
+		liveStatus.TodayQuotaSeconds != 3600 || liveStatus.BonusSeconds != 600 || liveStatus.RemainingSeconds != 4200 {
 		t.Fatalf("unexpected live status: code=%d value=%+v", statusResponse.Code, liveStatus)
 	}
 	eventsResponse := fixture.requestJSON(http.MethodGet, devicePath+"/events?limit=20", nil, false)
@@ -362,6 +369,40 @@ func TestLiveStatusUsesControlledComputerLocalDateWhileOnline(t *testing.T) {
 	_, _, status, err = fixture.app.loadDeviceLiveStatus(context.Background(), device.ID)
 	if err != nil || !status.GraphicalSessionActive || !status.Counting {
 		t.Fatalf("active graphical session not reflected in live status: %+v err=%v", status, err)
+	}
+}
+
+func TestLiveStatusDistinguishesRequestedFromConfirmedBlock(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	ctx := context.Background()
+	device, err := fixture.store.CreateDevice(ctx, "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.QueueControl(ctx, device.ID, "block_now", fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	response, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, LocalDate: "2026-08-10", GraphicalSessionActive: true,
+		GraphicalSessionID: "session-9",
+	}, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, requested, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || requested.ControlStatus != "block_requested" || requested.ActualState != "unblocked" {
+		t.Fatalf("requested status=%+v err=%v", requested, err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, ControlRevision: response.Control.Revision, LocalDate: "2026-08-10",
+		GraphicalSessionActive: true, GraphicalSessionLocked: true, GraphicalSessionID: "session-9",
+	}, fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, confirmed, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || confirmed.ControlStatus != "blocked" || confirmed.ActualState != "blocked" {
+		t.Fatalf("confirmed status=%+v err=%v", confirmed, err)
 	}
 }
 

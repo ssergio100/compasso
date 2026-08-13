@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
 var (

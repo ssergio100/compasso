@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sergio/compasso/agent/config"
+	"github.com/ssergio100/compasso/agent/config"
 )
 
 const maximumRequestBytes = 64 * 1024

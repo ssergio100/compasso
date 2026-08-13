@@ -26,6 +26,7 @@
     <category>System</category>
   </categories>
   <releases>
+    <release version="0.1.0~pilot20" date="2026-08-12"/>
     <release version="0.1.0~pilot19" date="2026-08-09"/>
   </releases>
   <content_rating type="oars-1.1"/>

@@ -15,7 +15,10 @@ import (
 	"unicode"
 )
 
-const gracefulLogoutTimeout = 15 * time.Second
+const (
+	sessionLockTimeout    = 5 * time.Second
+	sessionInspectTimeout = time.Second
+)
 
 type commandExecutor func(context.Context, string, ...string) ([]byte, error)
 
@@ -23,8 +26,6 @@ type commandExecutor func(context.Context, string, ...string) ([]byte, error)
 // Commands are executed directly without a shell.
 type Logind struct {
 	path               string
-	systemdRunPath     string
-	logoutHelperPath   string
 	sessionNamespaceID string
 	executeCommand     commandExecutor
 }
@@ -51,8 +52,6 @@ func newLogind(loginctlPath, sessionNamespaceID string) (*Logind, error) {
 	}
 	return &Logind{
 		path:               loginctlPath,
-		systemdRunPath:     "/usr/bin/systemd-run",
-		logoutHelperPath:   "/usr/libexec/compasso-session-logout",
 		sessionNamespaceID: sessionNamespaceID,
 		executeCommand:     executeCommand,
 	}, nil
@@ -159,33 +158,33 @@ func readSessionNamespace(path string) (string, error) {
 	return identifier, nil
 }
 
-// Logout asks the desktop session manager to close applications and return to
-// the greeter. It deliberately has no loginctl terminate-session fallback:
-// abruptly killing Plasma can leave a black screen with only the mouse cursor.
-func (l *Logind) Logout(ctx context.Context, current Session) error {
+// Lock asks logind to lock the graphical session without closing applications.
+func (l *Logind) Lock(ctx context.Context, current Session) error {
 	if err := validateSessionID(current.ID); err != nil {
 		return err
 	}
-	if current.User == "" || strings.ContainsAny(current.User, " \t\r\n/@") {
-		return fmt.Errorf("session %s has an invalid user for desktop logout", current.ID)
-	}
-
-	logoutContext, cancel := context.WithTimeout(ctx, gracefulLogoutTimeout)
+	lockContext, cancel := context.WithTimeout(ctx, sessionLockTimeout)
 	defer cancel()
-	machineName := current.User + "@.host"
-	arguments := []string{
-		"--user", "--machine=" + machineName, "--wait", "--collect", "--pipe", "--quiet",
-		l.logoutHelperPath,
-	}
-	output, err := l.executeCommand(logoutContext, l.systemdRunPath, arguments...)
+	output, err := l.executeCommand(lockContext, l.path, "lock-session", current.ID)
 	if err == nil {
 		return nil
 	}
-	message := strings.TrimSpace(string(output))
-	if message == "" {
-		message = err.Error()
+	return commandError("lock session "+current.ID, output, err)
+}
+
+// IsLocked reports logind's confirmed lock state for the session.
+func (l *Logind) IsLocked(ctx context.Context, current Session) (bool, error) {
+	if err := validateSessionID(current.ID); err != nil {
+		return false, err
 	}
-	return fmt.Errorf("orderly logout request failed for session %s: %s", current.ID, message)
+	inspectContext, cancel := context.WithTimeout(ctx, sessionInspectTimeout)
+	defer cancel()
+	output, err := l.executeCommand(inspectContext, l.path, "show-session", current.ID,
+		"--no-pager", "--property=LockedHint", "--value")
+	if err != nil {
+		return false, commandError("inspect session lock "+current.ID, output, err)
+	}
+	return parseLogindBool(strings.TrimSpace(string(output)))
 }
 
 func executeCommand(ctx context.Context, commandPath string, arguments ...string) ([]byte, error) {

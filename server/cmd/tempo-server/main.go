@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/server/config"
-	"github.com/sergio/compasso/server/storage"
-	"github.com/sergio/compasso/server/web"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/server/config"
+	"github.com/ssergio100/compasso/server/storage"
+	"github.com/ssergio100/compasso/server/web"
 )
 
 func main() {

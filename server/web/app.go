@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sergio/compasso/server/storage"
+	"github.com/ssergio100/compasso/server/storage"
 )
 
 const (

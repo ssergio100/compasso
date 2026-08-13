@@ -48,8 +48,7 @@ COMPASSO_DATA_DIRECTORY="${temporary_directory}/data" \
   docker compose --env-file \
     "${temporary_directory}/root/etc/compasso-server/compasso.env" \
     --project-directory "${package_root}" config --quiet
-node --check "${package_root}/admin-ui/api-client.js"
-node --check "${package_root}/admin-ui/app.js"
+test ! -e "${package_root}/admin-ui"
 bash -n "${package_root}"/scripts/*.sh
 
 echo "pacote Debian do servidor validado"

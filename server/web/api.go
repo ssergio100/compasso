@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	protocol "github.com/sergio/compasso/protocol/v1"
-	"github.com/sergio/compasso/server/storage"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
+	"github.com/ssergio100/compasso/server/storage"
 )
 
 const deviceIDHeader = "X-Tempo-Device-ID"

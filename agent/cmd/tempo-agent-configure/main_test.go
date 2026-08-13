@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/syncstatus"
+	"github.com/ssergio100/compasso/agent/syncstatus"
 )
 
 func TestWaitForSuccessfulSynchronizationAcceptsOnlineReport(t *testing.T) {

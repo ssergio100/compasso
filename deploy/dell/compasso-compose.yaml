@@ -1,0 +1,45 @@
+name: compasso
+
+services:
+  compasso-api:
+    image: compasso-api:${COMPASSO_VERSION:-0.1.0-pilot4}
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TEMPO_ADMIN_ORIGIN: ${COMPASSO_ADMIN_ORIGIN:-same-host}
+      TEMPO_SECURE_COOKIES: ${COMPASSO_SECURE_COOKIES:-false}
+    volumes:
+      - type: bind
+        source: ${COMPASSO_DATA_DIRECTORY:-/srv/docker/volumes/compasso}/server
+        target: /var/lib/tempo-server
+    ports:
+      - "${COMPASSO_API_BIND_ADDRESS:-0.0.0.0}:${COMPASSO_API_PORT:-8181}:8080"
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8080/healthz]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  compasso-sqlite-web:
+    image: ghcr.io/coleifer/sqlite-web:latest
+    restart: unless-stopped
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      SQLITE_WEB_PASSWORD: ${COMPASSO_SQLITE_WEB_PASSWORD}
+    volumes:
+      - type: bind
+        source: ${COMPASSO_DATA_DIRECTORY:-/srv/docker/volumes/compasso}/server
+        target: /data
+    ports:
+      - "${COMPASSO_SQLITE_WEB_PORT:-8183}:8080"
+    command: [tempo-server.db]

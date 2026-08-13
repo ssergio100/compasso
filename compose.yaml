@@ -29,28 +29,3 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-
-  compasso-admin-ui:
-    image: compasso-admin-ui:${COMPASSO_VERSION:-0.1.0-pilot4}
-    build:
-      context: admin-ui
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=16m
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    environment:
-      COMPASSO_API_BASE_URL: ${COMPASSO_API_BASE_URL:-auto}
-      COMPASSO_API_PORT: ${COMPASSO_API_PORT:-8181}
-    ports:
-      - "${COMPASSO_ADMIN_BIND_ADDRESS:-0.0.0.0}:${COMPASSO_ADMIN_PORT:-8182}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--output-document=/dev/null", "http://127.0.0.1:8080/healthz"]
-      interval: 15s
-      timeout: 3s
-      retries: 3
-      start_period: 10s

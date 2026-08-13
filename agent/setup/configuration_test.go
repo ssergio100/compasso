@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/config"
+	"github.com/ssergio100/compasso/agent/config"
 )
 
 func baseConfiguration() config.Config {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
 func TestCorrectPasswordAddsExactIdempotentBonusEvent(t *testing.T) {

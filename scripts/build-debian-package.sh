@@ -13,7 +13,6 @@ trap cleanup_temporary_directory EXIT
 required_sources=(
   "${project_root}/bin/tempo-agent"
   "${project_root}/bin/tempo-agent-configure"
-  "${project_root}/bin/compasso-session-logout"
   "${project_root}/local-ui/bonus_dialog.py"
   "${project_root}/local-ui/configure_agent.py"
   "${project_root}/packaging/applications/br.com.compasso.Compasso.desktop"
@@ -32,7 +31,7 @@ for required_source in "${required_sources[@]}"; do
   fi
 done
 
-binary_names=(tempo-agent tempo-agent-configure compasso-session-logout)
+binary_names=(tempo-agent tempo-agent-configure)
 for binary_name in "${binary_names[@]}"; do
   if ldd "${project_root}/bin/${binary_name}" | grep -Fq "libgo"; then
     echo "erro: ${binary_name} depende de libgo; use make build-agent-portable" >&2
@@ -83,7 +82,6 @@ install -m 0600 \
   "${package_root}/etc/tempo-agent/config.toml"
 install -m 0755 "${project_root}/bin/tempo-agent" "${package_root}/usr/sbin/tempo-agent"
 install -m 0755 "${project_root}/bin/tempo-agent-configure" "${package_root}/usr/sbin/tempo-agent-configure"
-install -m 0755 "${project_root}/bin/compasso-session-logout" "${package_root}/usr/libexec/compasso-session-logout"
 install -m 0755 "${project_root}/local-ui/bonus_dialog.py" "${package_root}/usr/bin/tempo-local-bonus"
 install -m 0755 "${project_root}/local-ui/configure_agent.py" "${package_root}/usr/bin/compasso-agent-setup"
 install -m 0644 \

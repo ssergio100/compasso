@@ -9,7 +9,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
-	"github.com/sergio/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/agent/localauth"
 )
 
 const (

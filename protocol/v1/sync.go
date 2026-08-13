@@ -10,11 +10,13 @@ const HeartbeatPath = "/api/v1/device/heartbeat"
 
 type HeartbeatRequest struct {
 	PolicyRevision         int64          `json:"policy_revision"`
+	ControlRevision        int64          `json:"control_revision,omitempty"`
 	SessionStateRevision   int64          `json:"session_state_revision,omitempty"`
 	LocalDate              string         `json:"local_date"`
 	SecondsUsed            int64          `json:"seconds_used"`
 	GraphicalSessionActive bool           `json:"graphical_session_active"`
 	GraphicalSessionID     string         `json:"graphical_session_id,omitempty"`
+	GraphicalSessionLocked bool           `json:"graphical_session_locked,omitempty"`
 	RequestSessionState    bool           `json:"request_session_state,omitempty"`
 	Events                 []PendingEvent `json:"events,omitempty"`
 	CommandAcks            []string       `json:"command_acks,omitempty"`
@@ -35,6 +37,14 @@ type HeartbeatResponse struct {
 	Policy             *Policy       `json:"policy,omitempty"`
 	SessionState       *SessionState `json:"session_state,omitempty"`
 	Commands           []Command     `json:"commands,omitempty"`
+	Control            Control       `json:"control"`
+}
+
+// Control is online-only authority and must be discarded after heartbeat failure.
+type Control struct {
+	Revision         int64 `json:"revision"`
+	MonitoringPaused bool  `json:"monitoring_paused"`
+	ManualBlock      bool  `json:"manual_block"`
 }
 
 // SessionState is an authoritative balance anchor. The agent applies it once

@@ -32,9 +32,9 @@ func (s Session) IsLocalGraphical() bool {
 	return graphical && userSession && alive && !s.Remote
 }
 
-// Manager discovers sessions through logind and requests an orderly desktop
-// logout through the controlled user's session bus.
+// Manager discovers sessions and controls their screen lock through logind.
 type Manager interface {
 	Sessions(context.Context, string) ([]Session, error)
-	Logout(context.Context, Session) error
+	Lock(context.Context, Session) error
+	IsLocked(context.Context, Session) (bool, error)
 }

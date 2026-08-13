@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sergio/compasso/agent/storage"
-	protocol "github.com/sergio/compasso/protocol/v1"
+	"github.com/ssergio100/compasso/agent/storage"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 type Config struct {
@@ -33,7 +33,26 @@ type Client struct {
 	graphicalSessionMu     sync.RWMutex
 	graphicalSessionActive bool
 	graphicalSessionID     string
+	graphicalSessionLocked bool
+	controlMu              sync.RWMutex
+	controlOnline          bool
+	controlPaused          bool
+	controlBlocked         bool
+	controlRevision        int64
 	statusReporter         func(error)
+}
+
+func (c *Client) RemoteControl() (online, paused, blocked bool) {
+	c.controlMu.RLock()
+	defer c.controlMu.RUnlock()
+	return c.controlOnline, c.controlPaused, c.controlBlocked
+}
+
+func (c *Client) setRemoteControl(online, paused, blocked bool, revision int64) {
+	c.controlMu.Lock()
+	c.controlOnline, c.controlPaused, c.controlBlocked = online, paused, blocked
+	c.controlRevision = revision
+	c.controlMu.Unlock()
 }
 
 // SetStatusReporter registers a process-local observer for synchronization
@@ -62,25 +81,32 @@ func New(store *storage.Store, httpClient *http.Client, config Config) (*Client,
 // SetGraphicalSession reports the established graphical session observed by
 // logind. Heartbeat takes a consistent snapshot without depending on desktop
 // environment variables.
-func (c *Client) SetGraphicalSession(active bool, sessionID string) {
+func (c *Client) SetGraphicalSession(active bool, sessionID string, locked bool) {
 	if !active {
 		sessionID = ""
+		locked = false
 	}
 	c.graphicalSessionMu.Lock()
 	c.graphicalSessionActive = active
 	c.graphicalSessionID = sessionID
+	c.graphicalSessionLocked = locked
 	c.graphicalSessionMu.Unlock()
 }
 
-func (c *Client) graphicalSession() (bool, string) {
+func (c *Client) graphicalSession() (bool, string, bool) {
 	c.graphicalSessionMu.RLock()
 	defer c.graphicalSessionMu.RUnlock()
-	return c.graphicalSessionActive, c.graphicalSessionID
+	return c.graphicalSessionActive, c.graphicalSessionID, c.graphicalSessionLocked
 }
 
 // Heartbeat performs one cycle. Durable events are removed only when their
 // identifiers are explicitly acknowledged by the server.
-func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.HeartbeatResponse, error) {
+func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.HeartbeatResponse, err error) {
+	defer func() {
+		if err != nil {
+			c.setRemoteControl(false, false, false, 0)
+		}
+	}()
 	if now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("heartbeat time is required")
 	}
@@ -92,7 +118,10 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		return protocol.HeartbeatResponse{}, err
 	}
 	localDate := now.Format("2006-01-02")
-	graphicalSessionActive, graphicalSessionID := c.graphicalSession()
+	graphicalSessionActive, graphicalSessionID, graphicalSessionLocked := c.graphicalSession()
+	c.controlMu.RLock()
+	controlRevision := c.controlRevision
+	c.controlMu.RUnlock()
 	confirmedState, hasConfirmedState := c.store.CurrentConfirmedSessionState()
 	usage, err := c.store.LoadDailyUsage(ctx, localDate)
 	if err != nil {
@@ -110,6 +139,8 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		PolicyRevision: revision, LocalDate: localDate, SecondsUsed: usage.SecondsUsed,
 		GraphicalSessionActive: graphicalSessionActive,
 		GraphicalSessionID:     graphicalSessionID,
+		GraphicalSessionLocked: graphicalSessionLocked,
+		ControlRevision:        controlRevision,
 		CommandAcks:            commandAcks,
 	}
 	if hasConfirmedState {
@@ -149,11 +180,12 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		c.recordRetries(ctx, pending)
 		return protocol.HeartbeatResponse{}, failure
 	}
-	result, err := decodeHeartbeatResponse(response.Body)
+	result, err = decodeHeartbeatResponse(response.Body)
 	if err != nil {
 		c.recordRetries(ctx, pending)
 		return protocol.HeartbeatResponse{}, err
 	}
+	c.setRemoteControl(true, result.Control.MonitoringPaused, result.Control.ManualBlock, result.Control.Revision)
 	for _, eventID := range result.AcknowledgedEvents {
 		if err := c.store.AcknowledgeEvent(ctx, eventID); err != nil {
 			return protocol.HeartbeatResponse{}, err

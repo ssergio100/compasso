@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
 func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {

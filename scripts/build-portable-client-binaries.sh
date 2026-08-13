@@ -23,7 +23,7 @@ docker build \
 
 temporary_container_id="$(docker create "${builder_image_name}" /tempo-agent)"
 
-binary_names=(tempo-agent tempo-agent-configure compasso-session-logout)
+binary_names=(tempo-agent tempo-agent-configure)
 for binary_name in "${binary_names[@]}"; do
   docker cp \
     "${temporary_container_id}:/${binary_name}" \

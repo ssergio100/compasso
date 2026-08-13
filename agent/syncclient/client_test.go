@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/agent/policy"
-	agentstorage "github.com/sergio/compasso/agent/storage"
-	serverstorage "github.com/sergio/compasso/server/storage"
-	"github.com/sergio/compasso/server/web"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/agent/policy"
+	agentstorage "github.com/ssergio100/compasso/agent/storage"
+	serverstorage "github.com/ssergio100/compasso/server/storage"
+	"github.com/ssergio100/compasso/server/web"
 )
 
 func TestRunReportsSuccessfulSynchronization(t *testing.T) {
@@ -269,7 +269,7 @@ func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.SetGraphicalSession(true, "session-7")
+	client.SetGraphicalSession(true, "session-7", false)
 	first, err := client.Heartbeat(ctx, now.Add(2*time.Second))
 	if err != nil || first.SessionState == nil || first.SessionState.RemainingSeconds != 600 {
 		t.Fatalf("initial session state=%+v err=%v", first.SessionState, err)
@@ -308,7 +308,7 @@ func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) 
 		t.Fatalf("post-bonus heartbeat reset anchor=%+v err=%v", unchangedAgain.SessionState, err)
 	}
 
-	client.SetGraphicalSession(false, "")
+	client.SetGraphicalSession(false, "", false)
 	if _, err := client.Heartbeat(ctx, now.Add(8*time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -415,6 +415,44 @@ func (transport handlerTransport) RoundTrip(request *http.Request) (*http.Respon
 }
 
 type failingTransport struct{ failure error }
+
+func TestHeartbeatFailureDiscardsRemoteControl(t *testing.T) {
+	ctx := context.Background()
+	store, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var online uint32 = 1
+	transport := handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.LoadUint32(&online) == 0 {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"server_time":"2026-08-10T12:00:00Z","control":{"revision":2,"monitoring_paused":false,"manual_block":true}}`))
+	})}
+	client, err := New(store, &http.Client{Transport: transport}, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token", HeartbeatInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	if _, err := client.Heartbeat(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if active, paused, blocked := client.RemoteControl(); !active || paused || !blocked {
+		t.Fatalf("online control active=%t paused=%t blocked=%t", active, paused, blocked)
+	}
+	atomic.StoreUint32(&online, 0)
+	if _, err := client.Heartbeat(ctx, now.Add(time.Second)); err == nil {
+		t.Fatal("offline heartbeat succeeded")
+	}
+	if active, paused, blocked := client.RemoteControl(); active || paused || blocked {
+		t.Fatalf("stale control active=%t paused=%t blocked=%t", active, paused, blocked)
+	}
+}
 
 func (transport failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	if transport.failure == nil {

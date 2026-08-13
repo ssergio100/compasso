@@ -114,6 +114,8 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Deve aceitar intervalos que atravessam a meia-noite, por exemplo 22:00–08:00.
 
+- Rotinas não podem se sobrepor, inclusive na meia-noite e na passagem de domingo para segunda-feira. O horário inicial pertence à rotina e o horário final não pertence; portanto, uma rotina pode começar exatamente quando outra termina.
+
 - Uma rotina bloqueia independentemente de saldo diário ou bônus.
 
 - Rotinas não consomem o saldo, pois o usuário não está autorizado a utilizar o computador naquele período.
@@ -463,7 +465,7 @@ Próximo bloqueio: 22:00 — Hora de dormir
 
 - Lista resumida das rotinas ativas com edição e exclusão.
 
-- Validar conflitos sem proibir sobreposição: duas rotinas simultâneas continuam resultando em bloqueio.
+- Impedir a criação ou edição de intervalos sobrepostos e informar qual rotina já ocupa o horário.
 
 ## 11.5 Segurança local
 

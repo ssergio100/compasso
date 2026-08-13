@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/server/storage"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/server/storage"
 )
 
 const csrfHeaderName = "X-CSRF-Token"
@@ -73,10 +73,17 @@ type adminAuditEventResponse struct {
 }
 
 type adminDeviceDetailResponse struct {
-	Device adminDeviceResponse       `json:"device"`
-	Policy adminPolicyResponse       `json:"policy"`
-	Status deviceLiveStatus          `json:"status"`
-	Events []adminAuditEventResponse `json:"events"`
+	Device  adminDeviceResponse       `json:"device"`
+	Policy  adminPolicyResponse       `json:"policy"`
+	Control adminControlResponse      `json:"control"`
+	Status  deviceLiveStatus          `json:"status"`
+	Events  []adminAuditEventResponse `json:"events"`
+}
+
+type adminControlResponse struct {
+	Revision         int64 `json:"revision"`
+	MonitoringPaused bool  `json:"monitoring_paused"`
+	ManualBlock      bool  `json:"manual_block"`
 }
 
 type createAdminDeviceRequest struct {
@@ -363,6 +370,10 @@ func (a *App) adminDeviceRootAPI(w http.ResponseWriter, r *http.Request, current
 		if !writeAdminReadError(w, err) {
 			return
 		}
+		control, err := a.store.LoadControl(r.Context(), deviceID)
+		if !writeAdminReadError(w, err) {
+			return
+		}
 		events, err := a.store.ListAudit(r.Context(), deviceID, 30)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not load audit events")
@@ -370,7 +381,8 @@ func (a *App) adminDeviceRootAPI(w http.ResponseWriter, r *http.Request, current
 		}
 		writeJSON(w, http.StatusOK, adminDeviceDetailResponse{
 			Device: a.adminDeviceResponse(device), Policy: adminPolicyResponseFromStorage(storedPolicy),
-			Status: liveStatus, Events: adminAuditEventsResponse(events),
+			Control: adminControlResponse{Revision: control.Revision, MonitoringPaused: control.MonitoringPaused, ManualBlock: control.ManualBlock},
+			Status:  liveStatus, Events: adminAuditEventsResponse(events),
 		})
 	case http.MethodPatch:
 		if !requireAdminCSRF(w, r, current) {
@@ -658,6 +670,11 @@ func writeAdminReadError(w http.ResponseWriter, err error) bool {
 func writeAdminMutationError(w http.ResponseWriter, err error) {
 	if errors.Is(err, storage.ErrNotFound) {
 		writeJSONError(w, http.StatusNotFound, "device or resource not found")
+		return
+	}
+	var conflict *storage.RoutineConflictError
+	if errors.As(err, &conflict) {
+		writeJSONError(w, http.StatusConflict, "Este intervalo já está ocupado pela rotina “"+conflict.RoutineName+"”.")
 		return
 	}
 	writeJSONError(w, http.StatusBadRequest, "invalid request")

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -80,7 +79,7 @@ func TestBalanceAuthorizationIDFallsBackOnlyForAlternateManagers(t *testing.T) {
 	}
 }
 
-func TestLogoutDelegatesToCapabilityBasedUserSessionHelper(t *testing.T) {
+func TestLockUsesLogindWithoutEndingSession(t *testing.T) {
 	manager, err := newLogind("/usr/bin/loginctl", "testnamespace")
 	if err != nil {
 		t.Fatal(err)
@@ -93,34 +92,29 @@ func TestLogoutDelegatesToCapabilityBasedUserSessionHelper(t *testing.T) {
 		return nil, nil
 	}
 	current := Session{ID: "3", User: "child", Type: "wayland", Class: "user", State: "active"}
-	if err := manager.Logout(context.Background(), current); err != nil {
+	if err := manager.Lock(context.Background(), current); err != nil {
 		t.Fatal(err)
 	}
-	expectedArguments := []string{
-		"--user", "--machine=child@.host", "--wait", "--collect", "--pipe", "--quiet",
-		"/usr/libexec/compasso-session-logout",
-	}
-	if commandPath != "/usr/bin/systemd-run" || !reflect.DeepEqual(commandArguments, expectedArguments) {
+	if commandPath != "/usr/bin/loginctl" || len(commandArguments) != 2 ||
+		commandArguments[0] != "lock-session" || commandArguments[1] != "3" {
 		t.Fatalf("command=%q arguments=%q", commandPath, commandArguments)
-	}
-	for _, argument := range commandArguments {
-		switch argument {
-		case "terminate-session", "org.kde.Shutdown", "org.gnome.SessionManager":
-			t.Fatalf("root daemon should not select a desktop logout mechanism: %q", argument)
-		}
 	}
 }
 
-func TestLogoutNeverFallsBackToAbruptTermination(t *testing.T) {
+func TestIsLockedReadsLogindLockedHint(t *testing.T) {
 	manager, err := newLogind("/usr/bin/loginctl", "testnamespace")
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.executeCommand = func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-		return []byte("desktop service unavailable"), errors.New("exit status 1")
+	manager.executeCommand = func(_ context.Context, _ string, arguments ...string) ([]byte, error) {
+		if len(arguments) == 5 && arguments[0] == "show-session" && arguments[1] == "9" {
+			return []byte("yes\n"), nil
+		}
+		return nil, errors.New("unexpected command")
 	}
 	current := Session{ID: "9", User: "child", Type: "x11", Class: "user", State: "active"}
-	if err := manager.Logout(context.Background(), current); err == nil {
-		t.Fatal("missing desktop logout service was treated as success")
+	locked, err := manager.IsLocked(context.Background(), current)
+	if err != nil || !locked {
+		t.Fatalf("locked=%t err=%v", locked, err)
 	}
 }

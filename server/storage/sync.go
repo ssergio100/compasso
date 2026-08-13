@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"time"
 
-	protocol "github.com/sergio/compasso/protocol/v1"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 var (
@@ -115,7 +115,7 @@ func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) 
 
 func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request protocol.HeartbeatRequest, now time.Time) (protocol.HeartbeatResponse, error) {
 	const maximumDailyUsageSeconds = int64((48 * time.Hour) / time.Second)
-	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.SessionStateRevision < 0 ||
+	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.ControlRevision < 0 || request.SessionStateRevision < 0 ||
 		request.SecondsUsed < 0 || request.SecondsUsed > maximumDailyUsageSeconds || now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("invalid heartbeat counters")
 	}
@@ -125,6 +125,9 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		}
 	} else if request.GraphicalSessionID != "" || request.RequestSessionState {
 		return protocol.HeartbeatResponse{}, errors.New("inactive graphical session cannot request session state")
+	}
+	if request.GraphicalSessionLocked && !request.GraphicalSessionActive {
+		return protocol.HeartbeatResponse{}, errors.New("inactive graphical session cannot be locked")
 	}
 	parsedDate, err := time.Parse("2006-01-02", request.LocalDate)
 	if err != nil || parsedDate.Format("2006-01-02") != request.LocalDate {
@@ -157,10 +160,10 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 	}
 	stamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE device SET last_seen_at=?, applied_policy_revision=?,
-			graphical_session_active=?, graphical_session_id=?, updated_at=? WHERE id=?`,
-		stamp, request.PolicyRevision, boolInt(request.GraphicalSessionActive),
-		nullableSessionID(request.GraphicalSessionActive, request.GraphicalSessionID), stamp, deviceID); err != nil {
+		UPDATE device SET last_seen_at=?, applied_policy_revision=?, applied_control_revision=?,
+			graphical_session_active=?, graphical_session_locked=?, graphical_session_id=?, updated_at=? WHERE id=?`,
+		stamp, request.PolicyRevision, request.ControlRevision, boolInt(request.GraphicalSessionActive),
+		boolInt(request.GraphicalSessionLocked), nullableSessionID(request.GraphicalSessionActive, request.GraphicalSessionID), stamp, deviceID); err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -193,6 +196,13 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 	}
 
 	response := protocol.HeartbeatResponse{ServerTime: now.UTC(), AcknowledgedEvents: acknowledged}
+	control, err := s.loadControl(ctx, deviceID)
+	if err != nil {
+		return protocol.HeartbeatResponse{}, err
+	}
+	response.Control = protocol.Control{
+		Revision: control.Revision, MonitoringPaused: control.MonitoringPaused, ManualBlock: control.ManualBlock,
+	}
 	if request.PolicyRevision < serverRevision {
 		policy, err := s.loadPolicy(ctx, deviceID)
 		if err != nil {
@@ -306,7 +316,7 @@ func policyForAPI(policy Policy) protocol.Policy {
 	return converted
 }
 
-// QueueControl updates the authoritative policy and queues an at-least-once command.
+// QueueControl updates online-only control state and queues its transition.
 func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now time.Time) error {
 	setClause := ""
 	switch kind {
@@ -331,16 +341,13 @@ func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now tim
 	}
 	defer tx.Rollback()
 	stamp := formatTime(now)
-	result, err := tx.ExecContext(ctx, `UPDATE policy SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
+	result, err := tx.ExecContext(ctx, `UPDATE device_control SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
 	if err != nil {
 		return err
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
 		return ErrNotFound
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE device SET policy_revision=policy_revision+1, updated_at=? WHERE id=?`, stamp, deviceID); err != nil {
-		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, ?, '{}', ?)`, commandID, deviceID, kind, stamp); err != nil {
 		return err

@@ -43,8 +43,7 @@ ln -s /etc/compasso-server/compasso.env "${application_root}/.env"
 
 cp -a "${project_root}/agent/localauth" "${project_root}/agent/policy" \
   "${project_root}/agent/storage" "${application_root}/agent/"
-cp -a "${project_root}/protocol" "${project_root}/server" \
-  "${project_root}/admin-ui" "${application_root}/"
+cp -a "${project_root}/protocol" "${project_root}/server" "${application_root}/"
 rm -f "${application_root}/server/config.toml"
 find "${application_root}" -type f \
   \( -name '*_test.go' -o -name '*.test.js' \) -delete
