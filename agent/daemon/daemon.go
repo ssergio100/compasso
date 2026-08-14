@@ -52,6 +52,7 @@ type Daemon struct {
 	lockAttempts          map[string]time.Time
 	synchronizationSource SynchronizationSource
 	alertNotifier         alert.Notifier
+	alertTracker          alert.Tracker
 }
 
 func (d *Daemon) SetAlertNotifier(notifier alert.Notifier) {
@@ -117,11 +118,9 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		}
 		key := current.BalanceAuthorizationID()
 		activeSessions[key] = true
-		if d.synchronizationSource != nil {
-			lockedSessions[key], err = d.sessions.IsLocked(ctx, current)
-			if err != nil {
-				return Status{}, err
-			}
+		lockedSessions[key], err = d.sessions.IsLocked(ctx, current)
+		if err != nil {
+			return Status{}, err
 		}
 	}
 	for key := range d.lockAttempts {
@@ -129,15 +128,15 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 			delete(d.lockAttempts, key)
 		}
 	}
-	if d.synchronizationSource != nil {
-		locked := false
-		for _, current := range graphical {
-			if current.State == "active" {
-				locked = lockedSessions[current.BalanceAuthorizationID()]
-				break
-			}
+	activeGraphicalSessionLocked := false
+	for _, current := range graphical {
+		if current.State == "active" {
+			activeGraphicalSessionLocked = lockedSessions[current.BalanceAuthorizationID()]
+			break
 		}
-		d.synchronizationSource.SetGraphicalSession(activeGraphicalSessionID != "", activeGraphicalSessionID, locked)
+	}
+	if d.synchronizationSource != nil {
+		d.synchronizationSource.SetGraphicalSession(activeGraphicalSessionID != "", activeGraphicalSessionID, activeGraphicalSessionLocked)
 	}
 	localDate := now.Format(localDateLayout)
 	if d.tracker == nil {
@@ -202,11 +201,13 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		AwaitingSynchronization: awaitingSynchronization,
 		UsageSeconds:            d.tracker.Seconds(),
 	}
-	if len(graphical) != 0 && !awaitingSynchronization {
-		status.DueAlerts, err = alert.DueAlerts(decision, snapshot.WarningMinutes, d.lastAt, now)
-		if err != nil {
-			return Status{}, fmt.Errorf("calculate due alerts: %w", err)
-		}
+	status.DueAlerts, err = d.alertTracker.Due(decision, snapshot.WarningMinutes, alert.Cycle{
+		PolicyRevision: snapshot.Revision,
+		SessionID:      activeGraphicalSessionID,
+		LocalDate:      localDate,
+	}, now, activeGraphicalSessionID != "" && !activeGraphicalSessionLocked && !awaitingSynchronization)
+	if err != nil {
+		return Status{}, fmt.Errorf("calculate due alerts: %w", err)
 	}
 	// Advance runtime accounting state before enforcement. A transient lock
 	// failure must not cause the same elapsed interval to be counted twice.

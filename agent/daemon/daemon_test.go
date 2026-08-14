@@ -252,6 +252,36 @@ func TestQuotaCycleEmitsOneMinuteDesktopAlert(t *testing.T) {
 	}
 }
 
+func TestLockedSessionConsumesAlertWithoutDeliveringItAfterUnlock(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	snapshot := testPolicy(1, start.Weekday(), 2*time.Minute)
+	snapshot.WarningMinutes = 1
+	if err := store.ReplacePolicy(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	sessions := graphicalFake()
+	sessions.locked = map[string]bool{"3": true}
+	policyDaemon, err := New(store, sessions, "child", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyDaemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := policyDaemon.Step(ctx, start.Add(time.Minute))
+	if err != nil || len(locked.DueAlerts) != 0 {
+		t.Fatalf("locked session alerts=%+v err=%v", locked.DueAlerts, err)
+	}
+	sessions.locked["3"] = false
+	unlocked, err := policyDaemon.Step(ctx, start.Add(time.Minute+time.Second))
+	if err != nil || len(unlocked.DueAlerts) != 0 {
+		t.Fatalf("unlock replayed alerts=%+v err=%v", unlocked.DueAlerts, err)
+	}
+}
+
 func TestRoutineStartTerminatesSession(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)
