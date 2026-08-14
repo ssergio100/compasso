@@ -86,6 +86,34 @@ func TestAdministrativePolicyLifecycle(t *testing.T) {
 	}
 }
 
+func TestRoutinesOverlap(t *testing.T) {
+	day := func(values ...time.Weekday) (days [7]bool) {
+		for _, value := range values {
+			days[value] = true
+		}
+		return days
+	}
+	tests := []struct {
+		name   string
+		first  Routine
+		second Routine
+		want   bool
+	}{
+		{"contained", Routine{Days: day(time.Monday), Start: 12 * 3600, End: 13 * 3600}, Routine{Days: day(time.Monday), Start: 12*3600 + 15*60, End: 12*3600 + 45*60}, true},
+		{"adjacent", Routine{Days: day(time.Monday), Start: 12 * 3600, End: 13 * 3600}, Routine{Days: day(time.Monday), Start: 13 * 3600, End: 14 * 3600}, false},
+		{"different days", Routine{Days: day(time.Monday), Start: 12 * 3600, End: 13 * 3600}, Routine{Days: day(time.Tuesday), Start: 12 * 3600, End: 13 * 3600}, false},
+		{"overnight next day", Routine{Days: day(time.Monday), Start: 22 * 3600, End: 7 * 3600}, Routine{Days: day(time.Tuesday), Start: 6 * 3600, End: 8 * 3600}, true},
+		{"week boundary", Routine{Days: day(time.Sunday), Start: 22 * 3600, End: 7 * 3600}, Routine{Days: day(time.Monday), Start: 6 * 3600, End: 8 * 3600}, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := routinesOverlap(test.first, test.second); got != test.want {
+				t.Fatalf("routinesOverlap()=%t want=%t", got, test.want)
+			}
+		})
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "server.db"))

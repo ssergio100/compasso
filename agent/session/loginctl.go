@@ -2,26 +2,59 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
+
+const (
+	sessionLockTimeout    = 5 * time.Second
+	sessionInspectTimeout = time.Second
+)
+
+type commandExecutor func(context.Context, string, ...string) ([]byte, error)
 
 // Logind uses loginctl, systemd's command-line client for logind's D-Bus API.
 // Commands are executed directly without a shell.
 type Logind struct {
-	path string
+	path               string
+	sessionNamespaceID string
+	executeCommand     commandExecutor
 }
 
 // NewLogind creates a logind-backed session manager.
 func NewLogind(loginctlPath string) (*Logind, error) {
+	runtimeDirectory := os.Getenv("RUNTIME_DIRECTORY")
+	if runtimeDirectory == "" {
+		runtimeDirectory = filepath.Join(os.TempDir(), fmt.Sprintf("tempo-agent-%d", os.Getuid()))
+	}
+	sessionNamespaceID, err := loadOrCreateSessionNamespace(runtimeDirectory)
+	if err != nil {
+		return nil, err
+	}
+	return newLogind(loginctlPath, sessionNamespaceID)
+}
+
+func newLogind(loginctlPath, sessionNamespaceID string) (*Logind, error) {
 	if loginctlPath == "" {
 		return nil, errors.New("loginctl path cannot be empty")
 	}
-	return &Logind{path: loginctlPath}, nil
+	if sessionNamespaceID == "" || strings.ContainsAny(sessionNamespaceID, " \t\r\n/@") {
+		return nil, errors.New("session namespace identifier is invalid")
+	}
+	return &Logind{
+		path:               loginctlPath,
+		sessionNamespaceID: sessionNamespaceID,
+		executeCommand:     executeCommand,
+	}, nil
 }
 
 // Sessions returns all logind sessions owned by username. Detailed properties
@@ -53,22 +86,109 @@ func (l *Logind) Sessions(ctx context.Context, username string) ([]Session, erro
 			return nil, err
 		}
 		if session.User == username {
+			session.AuthorizationID = l.sessionNamespaceID + "_" + session.ID
 			sessions = append(sessions, session)
 		}
 	}
 	return sessions, nil
 }
 
-// Terminate asks logind to terminate one complete session.
-func (l *Logind) Terminate(ctx context.Context, sessionID string) error {
-	if err := validateSessionID(sessionID); err != nil {
+func loadOrCreateSessionNamespace(runtimeDirectory string) (string, error) {
+	if runtimeDirectory == "" {
+		return "", errors.New("runtime directory is required")
+	}
+	if err := os.MkdirAll(runtimeDirectory, 0o700); err != nil {
+		return "", fmt.Errorf("create agent runtime directory: %w", err)
+	}
+	path := filepath.Join(runtimeDirectory, "session-namespace-id")
+	if stored, err := readSessionNamespace(path); err == nil {
+		return stored, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	randomBytes := make([]byte, 16)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("generate session namespace: %w", err)
+	}
+	identifier := hex.EncodeToString(randomBytes)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return readSessionNamespace(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("create session namespace: %w", err)
+	}
+	writeSucceeded := false
+	defer func() {
+		_ = file.Close()
+		if !writeSucceeded {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.WriteString(identifier + "\n"); err != nil {
+		return "", fmt.Errorf("write session namespace: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return "", fmt.Errorf("sync session namespace: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close session namespace: %w", err)
+	}
+	writeSucceeded = true
+	return identifier, nil
+}
+
+func readSessionNamespace(path string) (string, error) {
+	information, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !information.Mode().IsRegular() || information.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("stored session namespace has unsafe permissions")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	identifier := strings.TrimSpace(string(contents))
+	decoded, err := hex.DecodeString(identifier)
+	if err != nil || len(decoded) != 16 {
+		return "", errors.New("stored session namespace is invalid")
+	}
+	return identifier, nil
+}
+
+// Lock asks logind to lock the graphical session without closing applications.
+func (l *Logind) Lock(ctx context.Context, current Session) error {
+	if err := validateSessionID(current.ID); err != nil {
 		return err
 	}
-	output, err := exec.CommandContext(ctx, l.path, "terminate-session", sessionID).CombinedOutput()
-	if err != nil {
-		return commandError("terminate logind session "+sessionID, output, err)
+	lockContext, cancel := context.WithTimeout(ctx, sessionLockTimeout)
+	defer cancel()
+	output, err := l.executeCommand(lockContext, l.path, "lock-session", current.ID)
+	if err == nil {
+		return nil
 	}
-	return nil
+	return commandError("lock session "+current.ID, output, err)
+}
+
+// IsLocked reports logind's confirmed lock state for the session.
+func (l *Logind) IsLocked(ctx context.Context, current Session) (bool, error) {
+	if err := validateSessionID(current.ID); err != nil {
+		return false, err
+	}
+	inspectContext, cancel := context.WithTimeout(ctx, sessionInspectTimeout)
+	defer cancel()
+	output, err := l.executeCommand(inspectContext, l.path, "show-session", current.ID,
+		"--no-pager", "--property=LockedHint", "--value")
+	if err != nil {
+		return false, commandError("inspect session lock "+current.ID, output, err)
+	}
+	return parseLogindBool(strings.TrimSpace(string(output)))
+}
+
+func executeCommand(ctx context.Context, commandPath string, arguments ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, commandPath, arguments...).CombinedOutput()
 }
 
 func parseProperties(id string, output []byte) (Session, error) {

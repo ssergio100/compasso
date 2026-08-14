@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Compasso
+Comment=Adicionar tempo ou configurar o cliente Compasso
+Exec=/usr/bin/tempo-local-bonus
+Icon=preferences-system-time
+Terminal=false
+Categories=Settings;System;

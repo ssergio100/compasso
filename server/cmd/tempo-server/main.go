@@ -10,13 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/server/config"
-	"github.com/sergio/compasso/server/storage"
-	"github.com/sergio/compasso/server/web"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/server/config"
+	"github.com/ssergio100/compasso/server/storage"
+	"github.com/ssergio100/compasso/server/web"
 )
 
 func main() {
@@ -34,6 +35,10 @@ func run(configPath string, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
+	settings, err = config.ApplyEnvironmentOverrides(settings, os.Getenv)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(settings.DatabasePath), 0o700); err != nil {
 		return fmt.Errorf("create server state directory: %w", err)
 	}
@@ -44,7 +49,13 @@ func run(configPath string, logger *log.Logger) error {
 		return err
 	}
 	defer store.Close()
-	bootstrapLogin, bootstrapPassword := os.Getenv("TEMPO_ADMIN_LOGIN"), os.Getenv("TEMPO_ADMIN_PASSWORD")
+	bootstrapLogin := os.Getenv("TEMPO_ADMIN_LOGIN")
+	bootstrapPassword, err := loadBootstrapAdministratorPassword(
+		os.Getenv("TEMPO_ADMIN_PASSWORD"), os.Getenv("TEMPO_ADMIN_PASSWORD_FILE"),
+	)
+	if err != nil {
+		return err
+	}
 	if bootstrapLogin != "" && bootstrapPassword != "" {
 		hash, err := localauth.HashPassword(bootstrapPassword, localauth.DefaultArgon2Params)
 		if err != nil {
@@ -58,7 +69,9 @@ func run(configPath string, logger *log.Logger) error {
 			logger.Printf("initial administrator created login=%s", bootstrapLogin)
 		}
 	}
-	application, err := web.New(store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout)
+	application, err := web.New(
+		store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout, settings.AdminOrigin,
+	)
 	if err != nil {
 		return err
 	}
@@ -66,6 +79,7 @@ func run(configPath string, logger *log.Logger) error {
 		Addr: settings.ListenAddress, Handler: application,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 32 << 10,
 	}
 	shutdownDone := make(chan error, 1)
 	go func() {
@@ -80,4 +94,25 @@ func run(configPath string, logger *log.Logger) error {
 		return err
 	}
 	return <-shutdownDone
+}
+
+func loadBootstrapAdministratorPassword(environmentPassword, passwordFilePath string) (string, error) {
+	if environmentPassword != "" && passwordFilePath != "" {
+		return "", errors.New("configure only one of TEMPO_ADMIN_PASSWORD or TEMPO_ADMIN_PASSWORD_FILE")
+	}
+	if passwordFilePath == "" {
+		return environmentPassword, nil
+	}
+	fileInformation, err := os.Stat(passwordFilePath)
+	if err != nil {
+		return "", fmt.Errorf("inspect bootstrap administrator password file: %w", err)
+	}
+	if fileInformation.IsDir() || fileInformation.Size() > 4096 {
+		return "", errors.New("bootstrap administrator password file must be a regular file of at most 4096 bytes")
+	}
+	contents, err := os.ReadFile(passwordFilePath)
+	if err != nil {
+		return "", fmt.Errorf("read bootstrap administrator password file: %w", err)
+	}
+	return strings.TrimRight(string(contents), "\r\n"), nil
 }

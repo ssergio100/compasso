@@ -37,6 +37,8 @@ func (s *Store) ReplacePolicy(ctx context.Context, policy PolicySnapshot) error 
 	if err := validatePolicy(policy); err != nil {
 		return err
 	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	routines := append([]StoredRoutine(nil), policy.Routines...)
 	sort.Slice(routines, func(i, j int) bool { return routines[i].ID < routines[j].ID })
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -113,11 +115,57 @@ func (s *Store) ReplacePolicy(ctx context.Context, policy PolicySnapshot) error 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit policy replacement: %w", err)
 	}
+	policy.Routines = routines
+	s.cachedPolicy = clonePolicy(policy)
+	s.hasCachedPolicy = true
 	return nil
 }
 
 // LoadPolicy reconstructs the last complete, committed policy revision.
 func (s *Store) LoadPolicy(ctx context.Context) (PolicySnapshot, error) {
+	return s.loadPolicyFromDatabase(ctx)
+}
+
+// CurrentPolicy returns the in-memory policy used by the one-second daemon
+// loop. It is replaced atomically after a synchronized revision is committed.
+func (s *Store) CurrentPolicy() (PolicySnapshot, error) {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	if !s.hasCachedPolicy {
+		return PolicySnapshot{}, ErrNoPolicy
+	}
+	return clonePolicy(s.cachedPolicy), nil
+}
+
+func (s *Store) refreshPolicyCache(ctx context.Context) error {
+	policy, err := s.loadPolicyFromDatabase(ctx)
+	if errors.Is(err, ErrNoPolicy) {
+		s.policyMu.Lock()
+		s.cachedPolicy = PolicySnapshot{}
+		s.hasCachedPolicy = false
+		s.policyMu.Unlock()
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.setCachedPolicy(policy)
+	return nil
+}
+
+func (s *Store) setCachedPolicy(policy PolicySnapshot) {
+	s.policyMu.Lock()
+	s.cachedPolicy = clonePolicy(policy)
+	s.hasCachedPolicy = true
+	s.policyMu.Unlock()
+}
+
+func clonePolicy(policy PolicySnapshot) PolicySnapshot {
+	policy.Routines = append([]StoredRoutine(nil), policy.Routines...)
+	return policy
+}
+
+func (s *Store) loadPolicyFromDatabase(ctx context.Context) (PolicySnapshot, error) {
 	var policy PolicySnapshot
 	var paused, manual int
 	var updatedAt string

@@ -5,12 +5,23 @@ import "context"
 
 // Session is the subset of logind session metadata needed by the daemon.
 type Session struct {
-	ID     string
-	User   string
-	Type   string
-	Class  string
-	State  string
-	Remote bool
+	ID              string
+	AuthorizationID string
+	User            string
+	Type            string
+	Class           string
+	State           string
+	Remote          bool
+}
+
+// BalanceAuthorizationID distinguishes a logind session across agent runtime
+// namespaces. Test doubles and alternate managers may omit it and fall back to
+// the raw ID.
+func (s Session) BalanceAuthorizationID() string {
+	if s.AuthorizationID != "" {
+		return s.AuthorizationID
+	}
+	return s.ID
 }
 
 // IsLocalGraphical reports whether usage in this session counts for phase 3.
@@ -21,8 +32,9 @@ func (s Session) IsLocalGraphical() bool {
 	return graphical && userSession && alive && !s.Remote
 }
 
-// Manager discovers and terminates sessions through systemd-logind.
+// Manager discovers sessions and controls their screen lock through logind.
 type Manager interface {
 	Sessions(context.Context, string) ([]Session, error)
-	Terminate(context.Context, string) error
+	Lock(context.Context, Session) error
+	IsLocked(context.Context, Session) (bool, error)
 }

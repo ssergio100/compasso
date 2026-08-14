@@ -1,0 +1,23 @@
+.ring {
+  position: relative;
+  display: grid;
+  width: 7.25rem;
+  aspect-ratio: 1;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: conic-gradient(var(--ring-color, var(--ui-brand)) 0 var(--progress), var(--ui-line) var(--progress));
+}
+
+.ring::before {
+  position: absolute;
+  inset: 0.625rem;
+  border-radius: inherit;
+  background: var(--ui-surface);
+  content: "";
+}
+
+.content {
+  position: relative;
+  text-align: center;
+}

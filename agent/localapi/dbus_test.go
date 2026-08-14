@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/localauth"
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
 func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {
@@ -24,14 +24,20 @@ func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
-	if err := store.ReplacePolicy(ctx, storage.PolicySnapshot{
-		Revision: 1, LocalPasswordVerifier: verifier, UpdatedAt: now,
-	}); err != nil {
+	if err := store.ReplacePolicy(ctx, storage.PolicySnapshot{Revision: 1, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	service, _ := localauth.NewService(store)
-	api, _ := NewBonusAPI(service)
+	api, _ := newBonusAPI(service)
 	api.now = func() time.Time { return now }
+	if _, dbusErr := api.AddLocalBonus("anything", 900); dbusErr == nil || !strings.HasSuffix(dbusErr.Name, "PasswordNotConfigured") {
+		t.Fatalf("missing password D-Bus error=%v", dbusErr)
+	}
+	if err := store.ReplacePolicy(ctx, storage.PolicySnapshot{
+		Revision: 2, LocalPasswordVerifier: verifier, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, dbusErr := api.AddLocalBonus("wrong", 900); dbusErr == nil || !strings.HasSuffix(dbusErr.Name, "InvalidPassword") {
 		t.Fatalf("wrong password D-Bus error=%v", dbusErr)
 	}

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,13 +14,27 @@ import (
 	"fmt"
 	"time"
 
-	protocol "github.com/sergio/compasso/protocol/v1"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 var (
 	ErrInvalidDeviceCredentials = errors.New("invalid device credentials")
 	ErrRevisionAhead            = errors.New("client policy revision is ahead of server")
 )
+
+// RevisionAheadError identifies stale state from another server/device
+// enrollment without exposing credentials. Callers can present both revisions
+// instead of reducing this condition to an opaque HTTP conflict.
+type RevisionAheadError struct {
+	ClientRevision int64
+	ServerRevision int64
+}
+
+func (e *RevisionAheadError) Error() string {
+	return fmt.Sprintf("%s: client=%d server=%d", ErrRevisionAhead, e.ClientRevision, e.ServerRevision)
+}
+
+func (e *RevisionAheadError) Is(target error) bool { return target == ErrRevisionAhead }
 
 // IssueDeviceToken replaces a device credential and returns the secret once.
 // Only its SHA-256 digest is persisted; the token has 256 bits of entropy.
@@ -53,8 +68,33 @@ func (s *Store) IssueDeviceToken(ctx context.Context, deviceID string, now time.
 	return token, nil
 }
 
+// RevokeDeviceToken immediately rejects the current device credential without
+// creating a replacement secret.
+func (s *Store) RevokeDeviceToken(ctx context.Context, deviceID string, now time.Time) error {
+	if deviceID == "" || now.IsZero() {
+		return errors.New("device id and revocation time are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE device SET device_token_hash='', updated_at=? WHERE id=?`, formatTime(now), deviceID)
+	if err != nil {
+		return fmt.Errorf("revoke device token: %w", err)
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	if err := insertAudit(ctx, tx, deviceID, "device_token_revoked", map[string]string{"status": "revoked"}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) error {
-	if deviceID == "" || token == "" {
+	if !validOpaqueIdentifier(deviceID) || len(token) != 43 {
 		return ErrInvalidDeviceCredentials
 	}
 	var stored string
@@ -74,8 +114,20 @@ func (s *Store) AuthenticateDevice(ctx context.Context, deviceID, token string) 
 }
 
 func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request protocol.HeartbeatRequest, now time.Time) (protocol.HeartbeatResponse, error) {
-	if request.PolicyRevision < 0 || request.SecondsUsed < 0 || now.IsZero() {
+	const maximumDailyUsageSeconds = int64((48 * time.Hour) / time.Second)
+	if !validOpaqueIdentifier(deviceID) || request.PolicyRevision < 0 || request.ControlRevision < 0 || request.SessionStateRevision < 0 ||
+		request.SecondsUsed < 0 || request.SecondsUsed > maximumDailyUsageSeconds || now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("invalid heartbeat counters")
+	}
+	if request.GraphicalSessionActive {
+		if !validOpaqueIdentifier(request.GraphicalSessionID) {
+			return protocol.HeartbeatResponse{}, errors.New("active graphical session requires a valid identifier")
+		}
+	} else if request.GraphicalSessionID != "" || request.RequestSessionState {
+		return protocol.HeartbeatResponse{}, errors.New("inactive graphical session cannot request session state")
+	}
+	if request.GraphicalSessionLocked && !request.GraphicalSessionActive {
+		return protocol.HeartbeatResponse{}, errors.New("inactive graphical session cannot be locked")
 	}
 	parsedDate, err := time.Parse("2006-01-02", request.LocalDate)
 	if err != nil || parsedDate.Format("2006-01-02") != request.LocalDate {
@@ -96,13 +148,22 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 	} else if err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
-	if request.PolicyRevision > serverRevision {
-		return protocol.HeartbeatResponse{}, fmt.Errorf("%w: client=%d server=%d", ErrRevisionAhead, request.PolicyRevision, serverRevision)
+	if request.PolicyRevision > serverRevision || request.SessionStateRevision > serverRevision {
+		clientRevision := request.PolicyRevision
+		if request.SessionStateRevision > clientRevision {
+			clientRevision = request.SessionStateRevision
+		}
+		return protocol.HeartbeatResponse{}, &RevisionAheadError{
+			ClientRevision: clientRevision,
+			ServerRevision: serverRevision,
+		}
 	}
 	stamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE device SET last_seen_at=?, applied_policy_revision=?, updated_at=? WHERE id=?`,
-		stamp, request.PolicyRevision, stamp, deviceID); err != nil {
+		UPDATE device SET last_seen_at=?, applied_policy_revision=?, applied_control_revision=?,
+			graphical_session_active=?, graphical_session_locked=?, graphical_session_id=?, updated_at=? WHERE id=?`,
+		stamp, request.PolicyRevision, request.ControlRevision, boolInt(request.GraphicalSessionActive),
+		boolInt(request.GraphicalSessionLocked), nullableSessionID(request.GraphicalSessionActive, request.GraphicalSessionID), stamp, deviceID); err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -121,8 +182,8 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		acknowledged = append(acknowledged, event.UUID)
 	}
 	for _, commandID := range request.CommandAcks {
-		if commandID == "" {
-			return protocol.HeartbeatResponse{}, errors.New("empty command acknowledgement")
+		if !validOpaqueIdentifier(commandID) {
+			return protocol.HeartbeatResponse{}, errors.New("invalid command acknowledgement")
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE device_command SET acknowledged_at=COALESCE(acknowledged_at, ?)
@@ -135,6 +196,13 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 	}
 
 	response := protocol.HeartbeatResponse{ServerTime: now.UTC(), AcknowledgedEvents: acknowledged}
+	control, err := s.loadControl(ctx, deviceID)
+	if err != nil {
+		return protocol.HeartbeatResponse{}, err
+	}
+	response.Control = protocol.Control{
+		Revision: control.Revision, MonitoringPaused: control.MonitoringPaused, ManualBlock: control.ManualBlock,
+	}
 	if request.PolicyRevision < serverRevision {
 		policy, err := s.loadPolicy(ctx, deviceID)
 		if err != nil {
@@ -142,6 +210,15 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		}
 		converted := policyForAPI(policy)
 		response.Policy = &converted
+	}
+	if request.GraphicalSessionActive &&
+		(request.RequestSessionState || request.SessionStateRevision < serverRevision) {
+		state, err := s.confirmedSessionState(ctx, deviceID, request.GraphicalSessionID,
+			request.LocalDate, now)
+		if err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+		response.SessionState = &state
 	}
 	response.Commands, err = s.pendingCommands(ctx, deviceID, 100)
 	if err != nil {
@@ -151,11 +228,13 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 }
 
 func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protocol.PendingEvent) error {
-	if event.UUID == "" || event.Kind != "bonus_added" || event.CreatedAt.IsZero() || len(event.Payload) == 0 || len(event.Payload) > 16<<10 || !json.Valid(event.Payload) {
+	if !validOpaqueIdentifier(event.UUID) || event.Kind != "bonus_added" || event.CreatedAt.IsZero() || len(event.Payload) == 0 || len(event.Payload) > 16<<10 || !json.Valid(event.Payload) {
 		return errors.New("invalid pending event")
 	}
 	var bonus protocol.BonusPayload
-	if err := json.Unmarshal(event.Payload, &bonus); err != nil || bonus.LocalDate == "" || bonus.Seconds <= 0 || bonus.Origin != "local" {
+	decoder := json.NewDecoder(bytes.NewReader(event.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&bonus); err != nil || bonus.LocalDate == "" || bonus.Seconds <= 0 || bonus.Seconds > int64((12*time.Hour)/time.Second) || bonus.Origin != "local" {
 		return errors.New("invalid local bonus event")
 	}
 	parsed, err := time.Parse("2006-01-02", bonus.LocalDate)
@@ -167,12 +246,33 @@ func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protoc
 		VALUES (?, ?, ?, ?, 'local', ?)`, event.UUID, deviceID, bonus.LocalDate, bonus.Seconds, formatTime(event.CreatedAt)); err != nil {
 		return fmt.Errorf("store local bonus event: %w", err)
 	}
+	sanitizedPayload, err := json.Marshal(struct {
+		LocalDate string `json:"local_date"`
+		Seconds   int64  `json:"seconds"`
+		Origin    string `json:"origin"`
+	}{LocalDate: bonus.LocalDate, Seconds: bonus.Seconds, Origin: "local"})
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO audit_event(uuid, device_id, kind, origin, payload_json, created_at)
-		VALUES (?, ?, 'bonus_added', 'local', ?, ?)`, event.UUID, deviceID, string(event.Payload), formatTime(event.CreatedAt)); err != nil {
+		VALUES (?, ?, 'bonus_added', 'local', ?, ?)`, event.UUID, deviceID, string(sanitizedPayload), formatTime(event.CreatedAt)); err != nil {
 		return fmt.Errorf("audit local bonus event: %w", err)
 	}
 	return nil
+}
+
+func validOpaqueIdentifier(identifier string) bool {
+	if len(identifier) == 0 || len(identifier) > 128 {
+		return false
+	}
+	for _, character := range identifier {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) pendingCommands(ctx context.Context, deviceID string, limit int) ([]protocol.Command, error) {
@@ -216,7 +316,7 @@ func policyForAPI(policy Policy) protocol.Policy {
 	return converted
 }
 
-// QueueControl updates the authoritative policy and queues an at-least-once command.
+// QueueControl updates online-only control state and queues its transition.
 func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now time.Time) error {
 	setClause := ""
 	switch kind {
@@ -241,16 +341,13 @@ func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now tim
 	}
 	defer tx.Rollback()
 	stamp := formatTime(now)
-	result, err := tx.ExecContext(ctx, `UPDATE policy SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
+	result, err := tx.ExecContext(ctx, `UPDATE device_control SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
 	if err != nil {
 		return err
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
 		return ErrNotFound
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE device SET policy_revision=policy_revision+1, updated_at=? WHERE id=?`, stamp, deviceID); err != nil {
-		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, ?, '{}', ?)`, commandID, deviceID, kind, stamp); err != nil {
 		return err
@@ -283,6 +380,9 @@ func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID, localDate string
 	if _, err := tx.ExecContext(ctx, `INSERT INTO bonus(uuid, device_id, local_date, seconds, origin, created_at) VALUES (?, ?, ?, ?, 'web', ?)`, uuid, deviceID, localDate, seconds, stamp); err != nil {
 		return err
 	}
+	if _, err := bumpPolicyKeepWarning(ctx, tx, deviceID, now); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, 'add_bonus', ?, ?)`, uuid, deviceID, string(payload), stamp); err != nil {
 		return err
 	}
@@ -290,4 +390,41 @@ func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID, localDate string
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) confirmedSessionState(
+	ctx context.Context,
+	deviceID string,
+	sessionID string,
+	localDate string,
+	now time.Time,
+) (protocol.SessionState, error) {
+	policy, err := s.loadPolicy(ctx, deviceID)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	summary, err := s.LoadDailySummary(ctx, deviceID, localDate)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	parsedDate, err := time.Parse("2006-01-02", localDate)
+	if err != nil {
+		return protocol.SessionState{}, err
+	}
+	remaining := policy.WeeklyQuota[parsedDate.Weekday()] + summary.BonusSeconds - summary.UsedSeconds
+	if remaining < 0 {
+		remaining = 0
+	}
+	return protocol.SessionState{
+		Revision: policy.Revision, SessionID: sessionID, LocalDate: localDate,
+		RemainingSeconds: remaining, UsageSeconds: summary.UsedSeconds,
+		ConfirmedAt: now.UTC(),
+	}, nil
+}
+
+func nullableSessionID(active bool, sessionID string) interface{} {
+	if !active {
+		return nil
+	}
+	return sessionID
 }

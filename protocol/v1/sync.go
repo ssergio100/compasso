@@ -9,11 +9,17 @@ import (
 const HeartbeatPath = "/api/v1/device/heartbeat"
 
 type HeartbeatRequest struct {
-	PolicyRevision int64          `json:"policy_revision"`
-	LocalDate      string         `json:"local_date"`
-	SecondsUsed    int64          `json:"seconds_used"`
-	Events         []PendingEvent `json:"events,omitempty"`
-	CommandAcks    []string       `json:"command_acks,omitempty"`
+	PolicyRevision         int64          `json:"policy_revision"`
+	ControlRevision        int64          `json:"control_revision,omitempty"`
+	SessionStateRevision   int64          `json:"session_state_revision,omitempty"`
+	LocalDate              string         `json:"local_date"`
+	SecondsUsed            int64          `json:"seconds_used"`
+	GraphicalSessionActive bool           `json:"graphical_session_active"`
+	GraphicalSessionID     string         `json:"graphical_session_id,omitempty"`
+	GraphicalSessionLocked bool           `json:"graphical_session_locked,omitempty"`
+	RequestSessionState    bool           `json:"request_session_state,omitempty"`
+	Events                 []PendingEvent `json:"events,omitempty"`
+	CommandAcks            []string       `json:"command_acks,omitempty"`
 }
 
 type PendingEvent struct {
@@ -26,10 +32,31 @@ type PendingEvent struct {
 type jsonRaw = json.RawMessage
 
 type HeartbeatResponse struct {
-	ServerTime         time.Time `json:"server_time"`
-	AcknowledgedEvents []string  `json:"acknowledged_events,omitempty"`
-	Policy             *Policy   `json:"policy,omitempty"`
-	Commands           []Command `json:"commands,omitempty"`
+	ServerTime         time.Time     `json:"server_time"`
+	AcknowledgedEvents []string      `json:"acknowledged_events,omitempty"`
+	Policy             *Policy       `json:"policy,omitempty"`
+	SessionState       *SessionState `json:"session_state,omitempty"`
+	Commands           []Command     `json:"commands,omitempty"`
+	Control            Control       `json:"control"`
+}
+
+// Control is online-only authority and must be discarded after heartbeat failure.
+type Control struct {
+	Revision         int64 `json:"revision"`
+	MonitoringPaused bool  `json:"monitoring_paused"`
+	ManualBlock      bool  `json:"manual_block"`
+}
+
+// SessionState is an authoritative balance anchor. The agent applies it once
+// for the identified graphical session and then subtracts locally measured
+// elapsed usage until a new revision is explicitly delivered.
+type SessionState struct {
+	Revision         int64     `json:"revision"`
+	SessionID        string    `json:"session_id"`
+	LocalDate        string    `json:"local_date"`
+	RemainingSeconds int64     `json:"remaining_seconds"`
+	UsageSeconds     int64     `json:"usage_seconds"`
+	ConfirmedAt      time.Time `json:"confirmed_at"`
 }
 
 type Policy struct {
@@ -68,5 +95,8 @@ type BonusPayload struct {
 }
 
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error          string `json:"error"`
+	Code           string `json:"code,omitempty"`
+	ClientRevision int64  `json:"client_revision,omitempty"`
+	ServerRevision int64  `json:"server_revision,omitempty"`
 }

@@ -1,4 +1,4 @@
-module github.com/sergio/compasso
+module github.com/ssergio100/compasso
 
 go 1.18
 

@@ -1,8 +1,8 @@
 # Agent
 
 O `tempo-agent` é o daemon privilegiado instalado no computador controlado. Ele
-avalia a última política local, contabiliza sessões gráficas e solicita ao
-`systemd-logind` o encerramento da sessão quando uma regra bloquear o uso.
+avalia a última política local, contabiliza sessões gráficas e delega à sessão
+do usuário um pedido de logout normal quando uma regra bloquear o uso.
 
 ## Comportamento da fase 3
 
@@ -12,11 +12,23 @@ avalia a última política local, contabiliza sessões gráficas e solicita ao
 - TTY, SSH, sessões remotas, greeter e contas diferentes não contam;
 - a ausência de rede não interfere no ciclo local;
 - consumo é salvo a cada cinco segundos por padrão e no desligamento normal;
-- ao iniciar bloqueado, ou surgir uma nova sessão durante um bloqueio, o agente
-  solicita imediatamente o logout ao logind.
+- uma sessão já em uso é encerrada quando a política muda de liberada para
+  bloqueada;
+- uma sessão que surge durante um bloqueio não é encerrada durante `opening`;
+  depois de chegar a `active`, o agente aguarda dez segundos de estabilização.
+- quando a sincronização está configurada, uma sessão nova sem saldo também
+  aguarda o primeiro heartbeat concluído depois do login. Uma resposta com
+  tempo libera a sessão; uma resposta que mantenha o bloqueio permite o logout.
+  Falha de rede não conta como resposta e mantém a sessão aberta enquanto o
+  agente tenta novamente.
 
-Impedir um novo login de forma antecipada pertence ao gate PAM da fase 4. Até
-ele ser instalado, uma sessão que reapareça será encerrada pelo próximo ciclo.
+O requisito atual permite a autenticação. Quando a política continuar
+bloqueando, o agente espera a sessão gráfica ficar estabelecida antes de
+executar um helper no D-Bus do usuário. O helper descobre capacidades de logout
+normal sem consultar o nome do desktop e usa um adaptador compatível. Se nenhum
+adaptador aceitar a solicitação, o agente mantém a sessão aberta e registra o
+erro; ele não usa `loginctl terminate-session` como fallback. O retorno ao
+greeter sem tela preta ainda exige validação em máquinas reais.
 
 ## Execução de desenvolvimento
 
@@ -28,7 +40,8 @@ go run ./agent/cmd/tempo-agent -config ./agent/config.toml
 ```
 
 O pacote `policy` contém o motor puro, `storage` mantém SQLite e checkpoints,
-`session` integra com logind e `daemon` coordena o ciclo. A unidade de produção
+`session` usa logind para descoberta, e `sessionlogout` seleciona adaptadores
+pelas capacidades do D-Bus da sessão; `daemon` coordena o ciclo. A unidade de produção
 está em `packaging/systemd/tempo-agent.service`.
 
 ## Sincronização da fase 8
@@ -39,9 +52,12 @@ são aplicadas por revisão e comandos são confirmados de forma durável. Se os
 três valores estiverem vazios ou o servidor estiver indisponível, o daemon
 continua aplicando integralmente o estado local.
 
-Para o ensaio sem instalação no Zorin, siga `docs/phase-8.md`. Mantenha a
-vigilância pausada para não encerrar a própria sessão de desenvolvimento.
+Uma sessão nova solicita ao servidor uma âncora com saldo confirmado. A
+identidade combina o namespace privado do ciclo do serviço e a sessão logind.
+Depois da resposta, o daemon
+subtrai somente o uso monotônico posterior; heartbeats sem mudança não reaplicam
+saldo. O heartbeat também informa presença gráfica separadamente do estado
+online, permitindo que o painel pare o contador depois do logout.
 
-O gate contra novo login da fase 4 fica em `pamgate`. O executável
-`tempo-pam-check` é chamado pelo PAM e `tempo-pam-setup` instala ou restaura a
-regra do login gráfico. O procedimento está documentado em `docs/phase-4.md`.
+Para o ensaio sem instalação, siga `docs/phase-8.md`. Mantenha a vigilância
+pausada para não encerrar a própria sessão de desenvolvimento.

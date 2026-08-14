@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,21 +36,6 @@ type PendingEvent struct {
 	PayloadJSON string
 	CreatedAt   time.Time
 	RetryCount  int
-}
-
-// EnqueueEvent durably adds a generic idempotent event for a future heartbeat.
-func (s *Store) EnqueueEvent(ctx context.Context, event PendingEvent) error {
-	if err := validateEvent(event); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO pending_event(uuid, kind, payload_json, created_at, retry_count)
-		VALUES (?, ?, ?, ?, ?)`,
-		event.UUID, event.Kind, event.PayloadJSON, formatTime(event.CreatedAt), event.RetryCount,
-	); err != nil {
-		return fmt.Errorf("enqueue pending event: %w", err)
-	}
-	return nil
 }
 
 // CheckpointUsage saves an absolute consumed-seconds value. Values are
@@ -112,17 +98,24 @@ func (s *Store) AddBonusWithEvent(ctx context.Context, bonus Bonus, event Pendin
 	if bonus.UUID != event.UUID {
 		return errors.New("bonus and event UUID must match")
 	}
+	s.sessionStateMu.Lock()
+	defer s.sessionStateMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin bonus transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
+	bonusResult, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO bonus(uuid, local_date, seconds, origin, created_at)
 		VALUES (?, ?, ?, ?, ?)`,
 		bonus.UUID, bonus.LocalDate, bonus.Seconds, bonus.Origin, formatTime(bonus.CreatedAt),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store bonus: %w", err)
+	}
+	bonusInserted, err := bonusResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect stored bonus: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO pending_event(uuid, kind, payload_json, created_at, retry_count)
@@ -131,8 +124,19 @@ func (s *Store) AddBonusWithEvent(ctx context.Context, bonus Bonus, event Pendin
 	); err != nil {
 		return fmt.Errorf("store pending bonus event: %w", err)
 	}
+	if bonusInserted != 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE confirmed_session_state
+			SET remaining_seconds=remaining_seconds+?
+			WHERE singleton_id=1 AND local_date=?`, bonus.Seconds, bonus.LocalDate); err != nil {
+			return fmt.Errorf("add local bonus to confirmed balance: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit bonus transaction: %w", err)
+	}
+	if err := s.refreshConfirmedSessionStateLocked(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -187,30 +191,45 @@ func (s *Store) AcknowledgeEvent(ctx context.Context, uuid string) error {
 	if uuid == "" {
 		return errors.New("event UUID cannot be empty")
 	}
+	s.sessionStateMu.Lock()
+	defer s.sessionStateMu.Unlock()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_event WHERE uuid = ?`, uuid); err != nil {
 		return fmt.Errorf("acknowledge pending event: %w", err)
 	}
 	return nil
 }
 
-// IncrementEventRetry records an unsuccessful upload attempt without removing
-// the event from the durable queue.
-func (s *Store) IncrementEventRetry(ctx context.Context, uuid string) error {
-	if uuid == "" {
-		return errors.New("event UUID cannot be empty")
+// IncrementEventRetries records one unsuccessful batch upload in a single
+// database operation without removing events from the durable queue.
+func (s *Store) IncrementEventRetries(ctx context.Context, uuids []string) error {
+	if len(uuids) == 0 {
+		return nil
 	}
+	arguments := make([]interface{}, len(uuids))
+	seen := make(map[string]struct{}, len(uuids))
+	for index, uuid := range uuids {
+		if uuid == "" {
+			return errors.New("event UUID cannot be empty")
+		}
+		if _, duplicate := seen[uuid]; duplicate {
+			return fmt.Errorf("duplicate pending event %s", uuid)
+		}
+		seen[uuid] = struct{}{}
+		arguments[index] = uuid
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(uuids)), ",")
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE pending_event SET retry_count = retry_count + 1 WHERE uuid = ?`, uuid,
+		`UPDATE pending_event SET retry_count = retry_count + 1 WHERE uuid IN (`+placeholders+`)`, arguments...,
 	)
 	if err != nil {
-		return fmt.Errorf("increment event retry: %w", err)
+		return fmt.Errorf("increment event retries: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read event retry result: %w", err)
+		return fmt.Errorf("read event retry results: %w", err)
 	}
-	if changed == 0 {
-		return fmt.Errorf("pending event %s not found", uuid)
+	if changed != int64(len(uuids)) {
+		return fmt.Errorf("updated %d pending event retries, want %d", changed, len(uuids))
 	}
 	return nil
 }
@@ -283,6 +302,24 @@ func (t *UsageTracker) Seconds() int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.seconds
+}
+
+// EnsureAtLeast reconciles a server-confirmed absolute counter after a local
+// crash may have lost an uncheckpointed tail. It never reduces local usage.
+func (t *UsageTracker) EnsureAtLeast(ctx context.Context, seconds int64, now time.Time) error {
+	if seconds < 0 || now.IsZero() {
+		return errors.New("minimum usage must be non-negative and time must be set")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if seconds <= t.seconds {
+		return nil
+	}
+	t.seconds = seconds
+	t.uncheckpointed = 0
+	return t.store.CheckpointUsage(ctx, DailyUsage{
+		LocalDate: t.localDate, SecondsUsed: seconds, CheckpointAt: now,
+	})
 }
 
 func validateLocalDate(localDate string) error {

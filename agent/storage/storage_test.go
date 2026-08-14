@@ -16,12 +16,12 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	store := openTestStore(t, filepath.Join(t.TempDir(), "nested", "agent.db"))
 	defer store.Close()
 
-	version, err := store.SchemaVersion(ctx)
-	if err != nil {
+	var version int
+	if err := store.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2", version)
+	if version != 4 {
+		t.Fatalf("schema version = %d, want 4", version)
 	}
 	var integrity string
 	if err := store.db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
@@ -29,28 +29,6 @@ func TestOpenCreatesDatabaseAndAppliesAllMigrations(t *testing.T) {
 	}
 	if integrity != "ok" {
 		t.Fatalf("integrity_check = %q, want ok", integrity)
-	}
-}
-
-func TestOpenReadOnlyReadsExistingDatabase(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "agent.db")
-	store := openTestStore(t, path)
-	if err := store.ReplacePolicy(ctx, samplePolicy(1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := OpenReadOnly(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	policy, err := store.LoadPolicy(ctx)
-	if err != nil || policy.Revision != 1 {
-		t.Fatalf("read-only policy=%+v err=%v", policy, err)
 	}
 }
 
@@ -269,7 +247,7 @@ func TestOfflineBonusAndEventSurviveRestartAndPolicyReplacement(t *testing.T) {
 	if len(events) != 1 || events[0].UUID != bonus.UUID {
 		t.Fatalf("pending events after restart = %+v, want one bonus event", events)
 	}
-	if err := store.IncrementEventRetry(ctx, bonus.UUID); err != nil {
+	if err := store.IncrementEventRetries(ctx, []string{bonus.UUID}); err != nil {
 		t.Fatal(err)
 	}
 	events, err = store.PendingEvents(ctx, 10)
@@ -285,23 +263,95 @@ func TestOfflineBonusAndEventSurviveRestartAndPolicyReplacement(t *testing.T) {
 	}
 }
 
-func TestGenericEventQueueIsIdempotent(t *testing.T) {
+func TestConfirmedSessionStatePersistsAndPreservesInFlightLocalBonus(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agent.db")
+	store := openTestStore(t, path)
+	confirmedAt := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	initial := ConfirmedSessionState{
+		Revision: 2, SessionID: "session-7", LocalDate: "2026-08-10",
+		RemainingSeconds: 600, UsageSeconds: 10, ConfirmedAt: confirmedAt,
+	}
+	if err := store.SaveConfirmedSessionState(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+	bonus := Bonus{
+		UUID: "bonus-during-heartbeat", LocalDate: initial.LocalDate,
+		Seconds: 300, Origin: "local", CreatedAt: confirmedAt.Add(time.Second),
+	}
+	event := PendingEvent{
+		UUID: bonus.UUID, Kind: "bonus_added", PayloadJSON: `{"seconds":300}`,
+		CreatedAt: bonus.CreatedAt,
+	}
+	if err := store.AddBonusWithEvent(ctx, bonus, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddBonusWithEvent(ctx, bonus, event); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := store.CurrentConfirmedSessionState()
+	if !ok || state.RemainingSeconds != 900 {
+		t.Fatalf("state after idempotent local bonus=%+v available=%t", state, ok)
+	}
+
+	// Model a response calculated before the local bonus was created. Because
+	// the event is still pending, saving that response must retain the 300 s.
+	inFlightResponse := ConfirmedSessionState{
+		Revision: 2, SessionID: "session-7", LocalDate: initial.LocalDate,
+		RemainingSeconds: 590, UsageSeconds: 20, ConfirmedAt: confirmedAt.Add(2 * time.Second),
+	}
+	if err := store.SaveConfirmedSessionState(ctx, inFlightResponse); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = store.CurrentConfirmedSessionState()
+	if state.RemainingSeconds != 890 {
+		t.Fatalf("in-flight response erased local bonus: %+v", state)
+	}
+
+	if err := store.AcknowledgeEvent(ctx, bonus.UUID); err != nil {
+		t.Fatal(err)
+	}
+	serverIncludesBonus := inFlightResponse
+	serverIncludesBonus.RemainingSeconds = 890
+	serverIncludesBonus.ConfirmedAt = confirmedAt.Add(3 * time.Second)
+	if err := store.SaveConfirmedSessionState(ctx, serverIncludesBonus); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store = openTestStore(t, path)
+	defer store.Close()
+	state, ok = store.CurrentConfirmedSessionState()
+	if !ok || state.RemainingSeconds != 890 || state.UsageSeconds != 20 {
+		t.Fatalf("persisted confirmed state=%+v available=%t", state, ok)
+	}
+	usage, err := store.LoadDailyUsage(ctx, initial.LocalDate)
+	if err != nil || usage.SecondsUsed != 20 {
+		t.Fatalf("reconciled usage=%+v err=%v", usage, err)
+	}
+}
+
+func TestStoreOperationTimesOutWhileConnectionIsBusyAndRecovers(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "agent.db"))
 	defer store.Close()
-	event := PendingEvent{
-		UUID: "event-uuid-1", Kind: "policy_applied", PayloadJSON: `{"revision":7}`,
-		CreatedAt: time.Date(2026, time.August, 8, 16, 0, 0, 0, time.UTC),
-	}
-	if err := store.EnqueueEvent(ctx, event); err != nil {
+
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.EnqueueEvent(ctx, event); err != nil {
+	timeoutContext, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := store.LoadDailyUsage(timeoutContext, "2026-08-10"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy database error=%v, want deadline exceeded", err)
+	}
+	if err := transaction.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	events, err := store.PendingEvents(ctx, 10)
-	if err != nil || len(events) != 1 || events[0].UUID != event.UUID {
-		t.Fatalf("generic queue = %+v, err=%v", events, err)
+	if _, err := store.LoadDailyUsage(ctx, "2026-08-10"); err != nil {
+		t.Fatalf("database did not recover after releasing the connection: %v", err)
 	}
 }
 

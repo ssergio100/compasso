@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -38,6 +39,12 @@ func Load(path string) (Config, error) {
 	defer file.Close()
 
 	values := make(map[string]string)
+	allowedKeys := map[string]bool{
+		"database_path": true, "controlled_user": true, "tick_interval": true,
+		"checkpoint_interval": true, "loginctl_path": true, "server_url": true,
+		"device_id": true, "device_token": true, "heartbeat_interval": true,
+		"http_timeout": true,
+	}
 	scanner := bufio.NewScanner(file)
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(stripComment(scanner.Text()))
@@ -52,6 +59,12 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("configuration line %d: expected key = value", lineNumber)
 		}
 		key = strings.TrimSpace(key)
+		if !allowedKeys[key] {
+			return Config{}, fmt.Errorf("configuration line %d: unknown key %q", lineNumber, key)
+		}
+		if _, duplicate := values[key]; duplicate {
+			return Config{}, fmt.Errorf("configuration line %d: duplicate key %q", lineNumber, key)
+		}
 		value, err := strconv.Unquote(strings.TrimSpace(rawValue))
 		if err != nil {
 			return Config{}, fmt.Errorf("configuration line %d: value must be a quoted string: %w", lineNumber, err)
@@ -138,6 +151,9 @@ func (c Config) Validate() error {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return errors.New("server_url must be an http(s) origin without credentials, query or fragment")
 		}
+		if parsed.Scheme == "http" && !isLoopbackDevelopmentHost(parsed.Hostname()) {
+			return errors.New("server_url must use HTTPS unless it points to the local machine")
+		}
 	}
 	if c.HeartbeatInterval < time.Second || c.HeartbeatInterval > 10*time.Minute {
 		return errors.New("heartbeat_interval must be between 1 second and 10 minutes")
@@ -150,6 +166,14 @@ func (c Config) Validate() error {
 
 func (c Config) SyncEnabled() bool {
 	return c.ServerURL != "" && c.DeviceID != "" && c.DeviceToken != ""
+}
+
+func isLoopbackDevelopmentHost(hostname string) bool {
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	address := net.ParseIP(hostname)
+	return address != nil && address.IsLoopback()
 }
 
 func stripComment(line string) string {

@@ -7,9 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/pamgate"
-	"github.com/sergio/compasso/agent/policy"
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
 func TestCorrectPasswordAddsExactIdempotentBonusEvent(t *testing.T) {
@@ -41,9 +39,6 @@ func TestWrongPasswordDoesNotAddBonusAndRateLimits(t *testing.T) {
 	if _, err := service.Grant(ctx, "wrong", 15*60, now); !errors.Is(err, ErrInvalidPassword) {
 		t.Fatalf("wrong password error=%v", err)
 	}
-	if service.FailedAttempts() != 1 {
-		t.Fatalf("failed attempts=%d, want 1", service.FailedAttempts())
-	}
 	if _, err := service.Grant(ctx, "secret", 15*60, now.Add(time.Second)); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("early retry error=%v", err)
 	}
@@ -54,17 +49,34 @@ func TestWrongPasswordDoesNotAddBonusAndRateLimits(t *testing.T) {
 	if _, err := service.Grant(ctx, "secret", 15*60, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if service.FailedAttempts() != 0 {
-		t.Fatalf("failed attempts after success=%d, want 0", service.FailedAttempts())
+}
+
+func TestMissingPasswordIsReportedExplicitly(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, storage.PolicySnapshot{Revision: 1, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Grant(ctx, "anything", 15*60, now); !errors.Is(err, ErrPasswordNotConfigured) {
+		t.Fatalf("missing password error=%v", err)
 	}
 }
 
-func TestBonusSurvivesRestartAndDoesNotReleaseRoutine(t *testing.T) {
+func TestBonusSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	directory := t.TempDir()
 	path := filepath.Join(directory, "agent.db")
 	now := time.Date(2026, time.August, 10, 22, 30, 0, 0, time.Local)
-	store, service := serviceAtPath(t, path, now, true)
+	store, service := serviceAtPath(t, path, now)
 	if _, err := service.Grant(ctx, "secret", 60*60, now); err != nil {
 		t.Fatal(err)
 	}
@@ -81,23 +93,16 @@ func TestBonusSurvivesRestartAndDoesNotReleaseRoutine(t *testing.T) {
 	if err != nil || total != 3600 {
 		t.Fatalf("bonus after restart=%d err=%v", total, err)
 	}
-	result, err := pamgate.Check(ctx, store, "child", "child", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Allowed || result.Reason != policy.ReasonRoutine {
-		t.Fatalf("routine after bonus result=%+v", result)
-	}
 }
 
 func testService(t *testing.T) (*storage.Store, *Service, time.Time) {
 	t.Helper()
 	now := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.Local)
-	store, service := serviceAtPath(t, filepath.Join(t.TempDir(), "agent.db"), now, false)
+	store, service := serviceAtPath(t, filepath.Join(t.TempDir(), "agent.db"), now)
 	return store, service, now
 }
 
-func serviceAtPath(t *testing.T, path string, now time.Time, routine bool) (*storage.Store, *Service) {
+func serviceAtPath(t *testing.T, path string, now time.Time) (*storage.Store, *Service) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := storage.Open(ctx, path)
@@ -112,14 +117,6 @@ func serviceAtPath(t *testing.T, path string, now time.Time, routine bool) (*sto
 	quotas[now.Weekday()] = time.Hour
 	snapshot := storage.PolicySnapshot{
 		Revision: 1, WeeklyQuota: quotas, LocalPasswordVerifier: verifier, UpdatedAt: now,
-	}
-	if routine {
-		var days [7]bool
-		days[now.Weekday()] = true
-		snapshot.Routines = []storage.StoredRoutine{{
-			ID: "sleep", Name: "Sleep", Days: days,
-			Start: 22 * time.Hour, End: 8 * time.Hour, Enabled: true,
-		}}
 	}
 	if err := store.ReplacePolicy(ctx, snapshot); err != nil {
 		t.Fatal(err)

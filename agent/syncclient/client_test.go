@@ -1,20 +1,118 @@
 package syncclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/sergio/compasso/agent/policy"
-	agentstorage "github.com/sergio/compasso/agent/storage"
-	serverstorage "github.com/sergio/compasso/server/storage"
-	"github.com/sergio/compasso/server/web"
+	"github.com/ssergio100/compasso/agent/localauth"
+	"github.com/ssergio100/compasso/agent/policy"
+	agentstorage "github.com/ssergio100/compasso/agent/storage"
+	serverstorage "github.com/ssergio100/compasso/server/storage"
+	"github.com/ssergio100/compasso/server/web"
 )
+
+func TestRunTimesOutStalledAttemptAndReconnects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	transport := &recoveryTransport{}
+	httpClient := &http.Client{Transport: transport}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: 5 * time.Millisecond, AttemptTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported := make(chan error, 2)
+	client.SetStatusReporter(func(synchronizationError error) {
+		reported <- synchronizationError
+		if synchronizationError == nil {
+			cancel()
+		}
+	})
+	var output bytes.Buffer
+	finished := make(chan error, 1)
+	go func() {
+		finished <- client.Run(ctx, log.New(&output, "", 0))
+	}()
+	for expectedOffline := true; ; expectedOffline = false {
+		select {
+		case synchronizationError := <-reported:
+			if expectedOffline && synchronizationError == nil {
+				t.Fatal("stalled attempt was not reported offline")
+			}
+			if !expectedOffline && synchronizationError != nil {
+				t.Fatalf("recovery reported error=%v", synchronizationError)
+			}
+			if !expectedOffline {
+				goto recovered
+			}
+		case <-time.After(time.Second):
+			t.Fatal("synchronization did not recover after the stalled attempt")
+		}
+	}
+
+recovered:
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if attempts := atomic.LoadUint32(&transport.attempts); attempts != 2 {
+		t.Fatalf("transport attempts=%d, want 2", attempts)
+	}
+	if closes := atomic.LoadUint32(&transport.idleCloses); closes != 1 {
+		t.Fatalf("idle connection closes=%d, want 1", closes)
+	}
+	logs := output.String()
+	if !strings.Contains(logs, "offline stage=transport attempt=1") ||
+		!strings.Contains(logs, "online attempts=1") {
+		t.Fatalf("unexpected synchronization logs: %s", logs)
+	}
+}
+
+func TestDecodeHeartbeatErrorExplainsRevisionConflict(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusConflict, strings.NewReader(
+		`{"error":"client synchronization state is newer than this device","code":"revision_ahead","client_revision":9,"server_revision":1}`,
+	))
+	if !strings.Contains(err.Error(), "local revision 9") ||
+		!strings.Contains(err.Error(), "server revision 1") ||
+		!strings.Contains(err.Error(), "another enrollment") {
+		t.Fatalf("revision conflict error=%q", err)
+	}
+}
+
+func TestDecodeHeartbeatErrorDoesNotExposeUntrustedServerMessage(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusUnauthorized, strings.NewReader(
+		`{"error":"secret supplied by an untrusted proxy"}`,
+	))
+	if err.Error() != "heartbeat returned HTTP 401" {
+		t.Fatalf("generic heartbeat error=%q", err)
+	}
+}
+
+func TestDecodeLegacyConflictStillExplainsRevisionCause(t *testing.T) {
+	err := decodeHeartbeatError(http.StatusConflict, strings.NewReader(
+		`{"error":"heartbeat rejected"}`,
+	))
+	if !strings.Contains(err.Error(), "local synchronization state is newer") {
+		t.Fatalf("legacy revision conflict error=%q", err)
+	}
+}
 
 func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	ctx := context.Background()
@@ -40,7 +138,7 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	application, err := web.New(serverStore, false, time.Hour)
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +158,8 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 	defer agentStore.Close()
 	client, err := New(agentStore, httpClient, Config{
-		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token, HeartbeatInterval: 10 * time.Second,
+		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -134,10 +233,274 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 	}
 }
 
+func TestTransportErrorsRedactDeviceToken(t *testing.T) {
+	ctx := context.Background()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	deviceToken := "secret-device-token-that-must-not-appear"
+	httpClient := &http.Client{Transport: failingTransport{failure: fmt.Errorf("failed Authorization: Bearer %s", deviceToken)}}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: deviceToken,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, heartbeatError := client.Heartbeat(ctx, time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local))
+	if heartbeatError == nil || strings.Contains(heartbeatError.Error(), deviceToken) || !strings.Contains(heartbeatError.Error(), "[REDACTED]") {
+		t.Fatalf("transport error was not sanitized: %v", heartbeatError)
+	}
+}
+
+func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	serverStore, err := serverstorage.Open(ctx, filepath.Join(t.TempDir(), "server.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverStore.Close()
+	device, err := serverStore.CreateDevice(ctx, "Anchored balance", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := serverStore.IssueDeviceToken(ctx, device.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quotas [7]int64
+	quotas[now.Weekday()] = 600
+	if err := serverStore.SaveQuotas(ctx, device.ID, quotas, 1, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	client, err := New(agentStore, &http.Client{Transport: handlerTransport{handler: application}}, Config{
+		ServerURL: "http://tempo.test", DeviceID: device.ID, DeviceToken: token,
+		HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetGraphicalSession(true, "session-7", false)
+	first, err := client.Heartbeat(ctx, now.Add(2*time.Second))
+	if err != nil || first.SessionState == nil || first.SessionState.RemainingSeconds != 600 {
+		t.Fatalf("initial session state=%+v err=%v", first.SessionState, err)
+	}
+	initialAnchor, available := agentStore.CurrentConfirmedSessionState()
+	if !available || initialAnchor.SessionID != "session-7" || initialAnchor.RemainingSeconds != 600 {
+		t.Fatalf("stored initial anchor=%+v available=%t", initialAnchor, available)
+	}
+	if err := agentStore.CheckpointUsage(ctx, agentstorage.DailyUsage{
+		LocalDate: now.Format("2006-01-02"), SecondsUsed: 1, CheckpointAt: now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := client.Heartbeat(ctx, now.Add(4*time.Second))
+	if err != nil || unchanged.SessionState != nil {
+		t.Fatalf("unchanged heartbeat unexpectedly reset anchor=%+v err=%v", unchanged.SessionState, err)
+	}
+	afterUnchanged, _ := agentStore.CurrentConfirmedSessionState()
+	if afterUnchanged != initialAnchor {
+		t.Fatalf("unchanged heartbeat changed anchor: before=%+v after=%+v", initialAnchor, afterUnchanged)
+	}
+
+	if err := serverStore.QueueRemoteBonus(ctx, device.ID, now.Format("2006-01-02"), 300, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := client.Heartbeat(ctx, now.Add(6*time.Second))
+	if err != nil || changed.SessionState == nil || changed.SessionState.RemainingSeconds != 899 {
+		t.Fatalf("bonus session state=%+v err=%v", changed.SessionState, err)
+	}
+	bonusAnchor, _ := agentStore.CurrentConfirmedSessionState()
+	if bonusAnchor.RemainingSeconds != 899 || bonusAnchor.Revision <= initialAnchor.Revision {
+		t.Fatalf("bonus did not create a new anchor: initial=%+v bonus=%+v", initialAnchor, bonusAnchor)
+	}
+	unchangedAgain, err := client.Heartbeat(ctx, now.Add(7*time.Second))
+	if err != nil || unchangedAgain.SessionState != nil {
+		t.Fatalf("post-bonus heartbeat reset anchor=%+v err=%v", unchangedAgain.SessionState, err)
+	}
+
+	client.SetGraphicalSession(false, "", false)
+	if _, err := client.Heartbeat(ctx, now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	storedDevice, _, err := serverStore.LoadDevice(ctx, device.ID)
+	if err != nil || storedDevice.GraphicalSessionActive || storedDevice.GraphicalSessionID != "" {
+		t.Fatalf("server graphical presence=%+v err=%v", storedDevice, err)
+	}
+}
+
+func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	serverStore, err := serverstorage.Open(ctx, filepath.Join(t.TempDir(), "server.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverStore.Close()
+	device, err := serverStore.CreateDevice(ctx, "Password sync", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceToken, err := serverStore.IssueDeviceToken(ctx, device.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordParameters := localauth.Argon2Params{Memory: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 8, KeyLength: 16}
+	oldVerifier, err := localauth.HashPassword("old-password", passwordParameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newVerifier, err := localauth.HashPassword("new-password", passwordParameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverStore.SetLocalPassword(ctx, device.ID, oldVerifier, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serverOnline uint32 = 1
+	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadUint32(&serverOnline) == 0 {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		application.ServeHTTP(w, r)
+	})}}
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	synchronizationClient, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: device.ID,
+		DeviceToken: deviceToken, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := serverStore.SetLocalPassword(ctx, device.ID, newVerifier, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	atomic.StoreUint32(&serverOnline, 0)
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(4*time.Second)); err == nil {
+		t.Fatal("offline password synchronization unexpectedly succeeded")
+	}
+	offlinePolicy, err := agentStore.LoadPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPasswordValid, _ := localauth.VerifyPassword("old-password", offlinePolicy.LocalPasswordVerifier)
+	newPasswordValidOffline, _ := localauth.VerifyPassword("new-password", offlinePolicy.LocalPasswordVerifier)
+	if !oldPasswordValid || newPasswordValidOffline {
+		t.Fatal("offline client did not preserve the old password verifier")
+	}
+
+	atomic.StoreUint32(&serverOnline, 1)
+	if _, err := synchronizationClient.Heartbeat(ctx, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	onlinePolicy, err := agentStore.LoadPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPasswordValid, _ = localauth.VerifyPassword("old-password", onlinePolicy.LocalPasswordVerifier)
+	newPasswordValid, _ := localauth.VerifyPassword("new-password", onlinePolicy.LocalPasswordVerifier)
+	if oldPasswordValid || !newPasswordValid {
+		t.Fatal("successful synchronization did not replace the password verifier")
+	}
+}
+
 type handlerTransport struct{ handler http.Handler }
 
 func (transport handlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	recorder := httptest.NewRecorder()
 	transport.handler.ServeHTTP(recorder, request)
 	return recorder.Result(), nil
+}
+
+type recoveryTransport struct {
+	attempts   uint32
+	idleCloses uint32
+}
+
+func (transport *recoveryTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if atomic.AddUint32(&transport.attempts, 1) == 1 {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	}
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Content-Type", "application/json")
+	_, _ = recorder.Write([]byte(`{}`))
+	return recorder.Result(), nil
+}
+
+func (transport *recoveryTransport) CloseIdleConnections() {
+	atomic.AddUint32(&transport.idleCloses, 1)
+}
+
+type failingTransport struct{ failure error }
+
+func TestHeartbeatFailureDiscardsRemoteControl(t *testing.T) {
+	ctx := context.Background()
+	store, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var online uint32 = 1
+	transport := handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.LoadUint32(&online) == 0 {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"server_time":"2026-08-10T12:00:00Z","control":{"revision":2,"monitoring_paused":false,"manual_block":true}}`))
+	})}
+	client, err := New(store, &http.Client{Transport: transport}, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: time.Second, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local)
+	if _, err := client.Heartbeat(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if active, paused, blocked := client.RemoteControl(); !active || paused || !blocked {
+		t.Fatalf("online control active=%t paused=%t blocked=%t", active, paused, blocked)
+	}
+	atomic.StoreUint32(&online, 0)
+	if _, err := client.Heartbeat(ctx, now.Add(time.Second)); err == nil {
+		t.Fatal("offline heartbeat succeeded")
+	}
+	if active, paused, blocked := client.RemoteControl(); active || paused || blocked {
+		t.Fatalf("stale control active=%t paused=%t blocked=%t", active, paused, blocked)
+	}
+}
+
+func (transport failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if transport.failure == nil {
+		return nil, errors.New("transport failed")
+	}
+	return nil, transport.failure
 }

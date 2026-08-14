@@ -1,5 +1,10 @@
 # Fase 7 — servidor, autenticação e painel web
 
+> **Registro histórico:** esta fase entregou o primeiro painel renderizado pelo
+> servidor. A exigência posterior de desacoplamento completo será executada pelo
+> plano `docs/admin-frontend-decoupling-plan.md`; os itens abaixo registram o
+> que foi validado na implementação original.
+
 ## Implementação
 
 - login administrativo com senha Argon2id;

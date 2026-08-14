@@ -8,18 +8,30 @@ import (
 	"log"
 	"time"
 
-	"github.com/sergio/compasso/agent/policy"
-	"github.com/sergio/compasso/agent/session"
-	"github.com/sergio/compasso/agent/storage"
+	"github.com/ssergio100/compasso/agent/alert"
+	"github.com/ssergio100/compasso/agent/policy"
+	"github.com/ssergio100/compasso/agent/session"
+	"github.com/ssergio100/compasso/agent/storage"
 )
 
-const localDateLayout = "2006-01-02"
+const (
+	localDateLayout          = "2006-01-02"
+	sessionLockRetryInterval = 30 * time.Second
+)
 
 // Status describes one completed daemon cycle.
 type Status struct {
-	Decision         policy.Decision
-	GraphicalSession bool
-	UsageSeconds     int64
+	Decision                policy.Decision
+	GraphicalSession        bool
+	AwaitingSynchronization bool
+	UsageSeconds            int64
+	DueAlerts               []alert.Alert
+}
+
+// SynchronizationSource receives session presence for the next heartbeat.
+type SynchronizationSource interface {
+	SetGraphicalSession(active bool, sessionID string, locked bool)
+	RemoteControl() (online, paused, blocked bool)
 }
 
 // Daemon owns the runtime state that is intentionally not persisted between
@@ -30,14 +42,26 @@ type Daemon struct {
 	controlledUser  string
 	checkpointEvery time.Duration
 
-	tracker         *storage.UsageTracker
-	trackerDate     string
-	lastAt          time.Time
-	lastShouldCount bool
-	lastHadSession  bool
-	lastCountUntil  time.Time
-	fraction        time.Duration
-	terminated      map[string]bool
+	tracker               *storage.UsageTracker
+	trackerDate           string
+	lastAt                time.Time
+	lastShouldCount       bool
+	lastHadSession        bool
+	lastCountUntil        time.Time
+	fraction              time.Duration
+	lockAttempts          map[string]time.Time
+	synchronizationSource SynchronizationSource
+	alertNotifier         alert.Notifier
+}
+
+func (d *Daemon) SetAlertNotifier(notifier alert.Notifier) {
+	d.alertNotifier = notifier
+}
+
+// SetSynchronizationSource enables server-confirmed balance authorization and
+// graphical-session reporting.
+func (d *Daemon) SetSynchronizationSource(source SynchronizationSource) {
+	d.synchronizationSource = source
 }
 
 // New creates a daemon controller. Call Step periodically or Run for the
@@ -54,7 +78,7 @@ func New(store *storage.Store, sessions session.Manager, controlledUser string, 
 	}
 	return &Daemon{
 		store: store, sessions: sessions, controlledUser: controlledUser,
-		checkpointEvery: checkpointEvery, terminated: make(map[string]bool),
+		checkpointEvery: checkpointEvery, lockAttempts: make(map[string]time.Time),
 	}, nil
 }
 
@@ -68,15 +92,53 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		return Status{}, errors.New("step time moved backwards")
 	}
 
-	snapshot, err := d.store.LoadPolicy(ctx)
+	snapshot, err := d.store.CurrentPolicy()
 	if err != nil {
 		return Status{}, err
+	}
+	remoteOnline := false
+	if d.synchronizationSource != nil {
+		remoteOnline, snapshot.MonitoringPaused, snapshot.ManualBlock = d.synchronizationSource.RemoteControl()
+		if !remoteOnline {
+			snapshot.MonitoringPaused, snapshot.ManualBlock = false, false
+		}
 	}
 	allSessions, err := d.sessions.Sessions(ctx, d.controlledUser)
 	if err != nil {
 		return Status{}, err
 	}
 	graphical := graphicalSessions(allSessions)
+	activeGraphicalSessionID := establishedGraphicalSessionID(graphical)
+	lockedSessions := make(map[string]bool)
+	activeSessions := make(map[string]bool)
+	for _, current := range graphical {
+		if current.State != "active" {
+			continue
+		}
+		key := current.BalanceAuthorizationID()
+		activeSessions[key] = true
+		if d.synchronizationSource != nil {
+			lockedSessions[key], err = d.sessions.IsLocked(ctx, current)
+			if err != nil {
+				return Status{}, err
+			}
+		}
+	}
+	for key := range d.lockAttempts {
+		if !activeSessions[key] {
+			delete(d.lockAttempts, key)
+		}
+	}
+	if d.synchronizationSource != nil {
+		locked := false
+		for _, current := range graphical {
+			if current.State == "active" {
+				locked = lockedSessions[current.BalanceAuthorizationID()]
+				break
+			}
+		}
+		d.synchronizationSource.SetGraphicalSession(activeGraphicalSessionID != "", activeGraphicalSessionID, locked)
+	}
 	localDate := now.Format(localDateLayout)
 	if d.tracker == nil {
 		if err := d.prepareTracker(ctx, localDate, now); err != nil {
@@ -93,7 +155,7 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		if err := d.prepareTracker(ctx, localDate, now); err != nil {
 			return Status{}, err
 		}
-		newDayDecision, err := d.evaluate(ctx, snapshot, midnight)
+		newDayDecision, err := d.evaluate(ctx, snapshot, midnight, remoteOnline)
 		if err != nil {
 			return Status{}, err
 		}
@@ -110,9 +172,25 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		}
 	}
 
-	decision, err := d.evaluate(ctx, snapshot, now)
-	if err != nil {
-		return Status{}, err
+	confirmedState, hasConfirmedState := d.store.CurrentConfirmedSessionState()
+	if hasConfirmedState && confirmedState.LocalDate == localDate && d.tracker.Seconds() < confirmedState.UsageSeconds {
+		if err := d.tracker.EnsureAtLeast(ctx, confirmedState.UsageSeconds, now); err != nil {
+			return Status{}, fmt.Errorf("reconcile server-confirmed usage: %w", err)
+		}
+	}
+	awaitingSynchronization := remoteOnline && activeGraphicalSessionID != "" &&
+		(!hasConfirmedState || confirmedState.SessionID != activeGraphicalSessionID ||
+			confirmedState.LocalDate != localDate || confirmedState.Revision < snapshot.Revision)
+	var decision policy.Decision
+	if awaitingSynchronization {
+		decision = policy.Decision{
+			Allowed: true, Reason: policy.ReasonAwaitingSynchronization,
+		}
+	} else {
+		decision, err = d.evaluate(ctx, snapshot, now, remoteOnline)
+		if err != nil {
+			return Status{}, err
+		}
 	}
 	if !decision.Allowed && d.lastShouldCount {
 		if err := d.tracker.Flush(ctx, now); err != nil {
@@ -121,28 +199,43 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	}
 	status := Status{
 		Decision: decision, GraphicalSession: len(graphical) != 0,
-		UsageSeconds: d.tracker.Seconds(),
+		AwaitingSynchronization: awaitingSynchronization,
+		UsageSeconds:            d.tracker.Seconds(),
 	}
-	// Advance runtime accounting state before enforcement. A transient logout
+	if len(graphical) != 0 && !awaitingSynchronization {
+		status.DueAlerts, err = alert.DueAlerts(decision, snapshot.WarningMinutes, d.lastAt, now)
+		if err != nil {
+			return Status{}, fmt.Errorf("calculate due alerts: %w", err)
+		}
+	}
+	// Advance runtime accounting state before enforcement. A transient lock
 	// failure must not cause the same elapsed interval to be counted twice.
 	d.lastAt = now
 	d.lastShouldCount = decision.ShouldCount
 	d.lastHadSession = len(graphical) != 0
 	d.lastCountUntil = decision.NextBlockAt
+	if awaitingSynchronization {
+		return status, nil
+	}
 
 	if decision.Allowed {
-		for sessionID := range d.terminated {
-			delete(d.terminated, sessionID)
+		for key := range d.lockAttempts {
+			delete(d.lockAttempts, key)
 		}
 	} else {
 		for _, current := range graphical {
-			if d.terminated[current.ID] {
+			if current.State != "active" {
 				continue
 			}
-			if err := d.sessions.Terminate(ctx, current.ID); err != nil {
+			key := current.BalanceAuthorizationID()
+			attemptedAt, attempted := d.lockAttempts[key]
+			if attempted && now.Sub(attemptedAt) < sessionLockRetryInterval {
+				continue
+			}
+			d.lockAttempts[key] = now
+			if err := d.sessions.Lock(ctx, current); err != nil {
 				return status, err
 			}
-			d.terminated[current.ID] = true
 		}
 	}
 	return status, nil
@@ -184,11 +277,21 @@ func (d *Daemon) Run(ctx context.Context, tick time.Duration, logger *log.Logger
 			logger.Printf("agent cycle recovered")
 			lastError = ""
 		}
-		summary := fmt.Sprintf("%s:%t", status.Decision.Reason, status.GraphicalSession)
+		for _, dueAlert := range status.DueAlerts {
+			if d.alertNotifier == nil {
+				logger.Printf("desktop alert unavailable kind=%s", dueAlert.Kind)
+				continue
+			}
+			if err := d.alertNotifier.Notify(ctx, dueAlert); err != nil {
+				logger.Printf("desktop alert failed kind=%s: %v", dueAlert.Kind, err)
+			}
+		}
+		summary := fmt.Sprintf("%s:%t:%t", status.Decision.Reason, status.GraphicalSession,
+			status.AwaitingSynchronization)
 		if summary != lastSummary {
-			logger.Printf("decision=%s session=%t usage_seconds=%d remaining_seconds=%d",
-				status.Decision.Reason, status.GraphicalSession, status.UsageSeconds,
-				int64(status.Decision.Remaining/time.Second))
+			logger.Printf("decision=%s session=%t awaiting_synchronization=%t usage_seconds=%d remaining_seconds=%d",
+				status.Decision.Reason, status.GraphicalSession, status.AwaitingSynchronization,
+				status.UsageSeconds, int64(status.Decision.Remaining/time.Second))
 			lastSummary = summary
 		}
 	}
@@ -238,20 +341,36 @@ func (d *Daemon) addElapsed(ctx context.Context, elapsed time.Duration, now time
 	return d.tracker.Add(ctx, whole, now)
 }
 
-func (d *Daemon) evaluate(ctx context.Context, snapshot storage.PolicySnapshot, now time.Time) (policy.Decision, error) {
-	bonus, err := d.store.TotalBonusSeconds(ctx, d.trackerDate)
-	if err != nil {
-		return policy.Decision{}, fmt.Errorf("load daily bonus: %w", err)
-	}
+func (d *Daemon) evaluate(ctx context.Context, snapshot storage.PolicySnapshot, now time.Time, serverAuthority bool) (policy.Decision, error) {
 	monitoring := policy.MonitoringActive
 	if snapshot.MonitoringPaused {
 		monitoring = policy.MonitoringPaused
 	}
 	input := policy.Input{
 		Now: now, Monitoring: monitoring, ManualBlock: snapshot.ManualBlock,
-		Quota:    policy.WeeklyQuota(snapshot.WeeklyQuota),
-		Consumed: time.Duration(d.tracker.Seconds()) * time.Second,
-		Bonus:    time.Duration(bonus) * time.Second,
+	}
+	if !serverAuthority {
+		bonus, err := d.store.TotalBonusSeconds(ctx, d.trackerDate)
+		if err != nil {
+			return policy.Decision{}, fmt.Errorf("load daily bonus: %w", err)
+		}
+		input.Quota = policy.WeeklyQuota(snapshot.WeeklyQuota)
+		input.Consumed = time.Duration(d.tracker.Seconds()) * time.Second
+		input.Bonus = time.Duration(bonus) * time.Second
+	} else {
+		confirmedState, available := d.store.CurrentConfirmedSessionState()
+		remainingSeconds := int64(0)
+		if available && confirmedState.LocalDate == d.trackerDate {
+			usageSinceConfirmation := d.tracker.Seconds() - confirmedState.UsageSeconds
+			if usageSinceConfirmation < 0 {
+				usageSinceConfirmation = 0
+			}
+			remainingSeconds = confirmedState.RemainingSeconds - usageSinceConfirmation
+			if remainingSeconds < 0 {
+				remainingSeconds = 0
+			}
+		}
+		input.Quota[now.Weekday()] = time.Duration(remainingSeconds) * time.Second
 	}
 	for _, routine := range snapshot.Routines {
 		if routine.Enabled {
@@ -265,6 +384,15 @@ func (d *Daemon) evaluate(ctx context.Context, snapshot storage.PolicySnapshot, 
 		return policy.Decision{}, fmt.Errorf("evaluate policy: %w", err)
 	}
 	return decision, nil
+}
+
+func establishedGraphicalSessionID(sessions []session.Session) string {
+	for _, current := range sessions {
+		if current.State == "active" {
+			return current.BalanceAuthorizationID()
+		}
+	}
+	return ""
 }
 
 func graphicalSessions(sessions []session.Session) []session.Session {

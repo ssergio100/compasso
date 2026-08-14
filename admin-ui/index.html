@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compasso</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/runtime-config.js"></script>
+  <script src="/api-client.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header id="topbar" class="topbar" hidden>
+    <a class="brand" href="/" data-route>Compasso</a>
+    <div class="top-actions">
+      <span id="admin-login"></span>
+      <button id="logout-button" class="link-button" type="button">Sair</button>
+    </div>
+  </header>
+  <main id="application" class="container" aria-live="polite">
+    <section class="card loading-card">Carregando Compasso…</section>
+  </main>
+  <noscript>O Compasso precisa de JavaScript habilitado para abrir o painel.</noscript>
+</body>
+</html>

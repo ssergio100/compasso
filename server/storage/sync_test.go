@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	protocol "github.com/sergio/compasso/protocol/v1"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
@@ -28,6 +29,16 @@ func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
 	}
 	if err := store.AuthenticateDevice(ctx, device.ID, "wrong"); !errors.Is(err, ErrInvalidDeviceCredentials) {
 		t.Fatalf("wrong credential error=%v", err)
+	}
+	if err := store.RevokeDeviceToken(ctx, device.ID, now.Add(time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AuthenticateDevice(ctx, device.ID, token); !errors.Is(err, ErrInvalidDeviceCredentials) {
+		t.Fatalf("revoked credential error=%v", err)
+	}
+	token, err = store.IssueDeviceToken(ctx, device.ID, now.Add(2*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
 	}
 	payload, _ := json.Marshal(protocol.BonusPayload{LocalDate: "2026-08-10", Seconds: 300, Origin: "local"})
 	heartbeat := protocol.HeartbeatRequest{
@@ -50,6 +61,10 @@ func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
 	if err != nil || summary.UsedSeconds != 120 || summary.BonusSeconds != 300 {
 		t.Fatalf("duplicate changed summary=%+v err=%v", summary, err)
 	}
+	latestLocalDate, err := store.LatestHeartbeatLocalDate(ctx, device.ID)
+	if err != nil || latestLocalDate != "2026-08-10" {
+		t.Fatalf("latest heartbeat local date=%q err=%v", latestLocalDate, err)
+	}
 	events, err := store.ListAudit(ctx, device.ID, 50)
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +77,28 @@ func TestDeviceAuthenticationAndDuplicateHeartbeatAreIdempotent(t *testing.T) {
 	}
 	if bonusEvents != 1 {
 		t.Fatalf("duplicate heartbeat created %d bonus audit events", bonusEvents)
+	}
+}
+
+func TestRevisionAheadErrorCarriesBothRevisions(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "New enrollment", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 9,
+		LocalDate:      "2026-08-10",
+	}, now.Add(time.Second))
+	var revisionError *RevisionAheadError
+	if !errors.As(err, &revisionError) {
+		t.Fatalf("revision conflict error=%v", err)
+	}
+	if revisionError.ClientRevision != 9 || revisionError.ServerRevision != 1 {
+		t.Fatalf("revision conflict=%+v", revisionError)
 	}
 }
 
@@ -90,5 +127,67 @@ func TestCommandsRemainPendingUntilAcknowledged(t *testing.T) {
 	third, err := store.ReceiveHeartbeat(ctx, device.ID, request, now.Add(3*time.Second))
 	if err != nil || len(third.Commands) != 0 {
 		t.Fatalf("acknowledged command still pending: %+v err=%v", third.Commands, err)
+	}
+}
+
+func TestRemoteControlDoesNotBecomeOfflinePolicy(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.loadPolicy(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"block_now", "pause_monitoring"} {
+		if err := store.QueueControl(ctx, device.ID, command, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		after, err := store.loadPolicy(ctx, device.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Revision != before.Revision || after.ManualBlock || after.MonitoringPaused {
+			t.Fatalf("remote command %q changed offline policy: before=%+v after=%+v", command, before, after)
+		}
+	}
+	heartbeat, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: before.Revision, LocalDate: "2026-08-10",
+	}, now.Add(2*time.Second))
+	if err != nil || !heartbeat.Control.ManualBlock || !heartbeat.Control.MonitoringPaused {
+		t.Fatalf("heartbeat control=%+v err=%v", heartbeat.Control, err)
+	}
+}
+
+func TestHeartbeatRejectsUnexpectedAuditFields(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"local_date":"2026-08-10","seconds":300,"origin":"local","device_token":"must-not-be-stored"}`)
+	_, err = store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, LocalDate: "2026-08-10",
+		Events: []protocol.PendingEvent{{UUID: "unexpected-field", Kind: "bonus_added", Payload: payload, CreatedAt: now}},
+	}, now)
+	if err == nil {
+		t.Fatal("event with an unexpected sensitive field was accepted")
+	}
+	events, listError := store.ListAudit(ctx, device.ID, 20)
+	if listError != nil {
+		t.Fatal(listError)
+	}
+	for _, event := range events {
+		if strings.Contains(event.Details, "must-not-be-stored") {
+			t.Fatalf("audit stored a sensitive field: %+v", event)
+		}
 	}
 }

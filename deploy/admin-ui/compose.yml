@@ -1,0 +1,10 @@
+services:
+  compasso-admin-ui:
+    image: nginx:alpine
+    container_name: compasso-admin-ui
+    restart: unless-stopped
+    ports:
+      - "8182:80"
+    volumes:
+      - /srv/sites/compasso-admin-ui:/usr/share/nginx/html:ro
+      - ./default.conf:/etc/nginx/conf.d/default.conf:ro

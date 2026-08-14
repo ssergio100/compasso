@@ -10,6 +10,12 @@
 - retry com backoff sem interromper o motor local;
 - estado online/offline, última conexão e revisão aplicada no painel;
 - ações remotas de bônus, pausa, retomada e bloqueio.
+- saldo confirmado pelo servidor somente na autorização inicial da sessão ou
+  quando uma revisão relevante mudar;
+- presença de sessão gráfica separada da presença online do agente;
+- âncora persistente identificada pelo namespace privado do ciclo do serviço e
+  pela sessão logind, consumida
+  localmente sem recálculo periódico de cota e bônus.
 
 ## Testes automatizados
 
@@ -22,6 +28,10 @@ Executados por `make test`:
 - redução remota da cota produz decisão imediata de bloqueio;
 - credencial incorreta recebe HTTP 401;
 - comando é reenviado até ser confirmado e depois sai da fila.
+- heartbeat comum não substitui a âncora nem devolve segundos ao contador;
+- bônus remoto cria nova âncora e bônus local concorrente não é perdido;
+- agente online sem sessão gráfica mantém o contador do painel parado;
+- daemon expira uma âncora de três segundos mesmo com cota local de oito horas.
 
 ## Teste integrado seguro no Zorin
 
@@ -44,7 +54,8 @@ mantenha a vigilância pausada durante todo o ensaio.
 
    ```bash
    cd /home/sergio/projetos/compasso
-   ./scripts/configure-phase8-test.sh
+   cp agent/config.example.toml agent/config.toml
+   # Edite agent/config.toml e informe server_url, device_id e device_token.
    go run ./agent/cmd/tempo-agent -config agent/config.toml
    ```
 

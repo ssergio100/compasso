@@ -1,0 +1,50 @@
+#!/bin/sh
+set -e
+
+if [ "$1" != "configure" ]; then
+  exit 0
+fi
+
+# The pre-package installer wrote a unit here. /etc has precedence over the
+# packaged /usr/lib unit, so leaving it behind silently runs obsolete code and
+# hardening settings after an upgrade.
+if [ -f /etc/systemd/system/tempo-agent.service ]; then
+  rm -f /etc/systemd/system/tempo-agent.service
+  echo "Unidade legada /etc/systemd/system/tempo-agent.service removida."
+fi
+
+install -d -o root -g root -m 0700 /var/lib/tempo-agent
+chmod 0600 /etc/tempo-agent/config.toml
+
+# A fresh installation (including reinstall after package removal) must be
+# enrolled explicitly and must not inherit policy or usage from an earlier
+# enrollment. Only an in-place package upgrade may retain local state and
+# immediately resume offline policy enforcement.
+if [ -z "${2:-}" ]; then
+  rm -f /etc/tempo-agent/setup-complete
+  rm -f /var/lib/tempo-agent/tempo-agent.db
+  rm -f /var/lib/tempo-agent/tempo-agent.db-wal
+  rm -f /var/lib/tempo-agent/tempo-agent.db-shm
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+  if [ -f /etc/tempo-agent/setup-complete ]; then
+    systemctl enable tempo-agent.service 2>/dev/null || true
+    systemctl restart tempo-agent.service
+  else
+    systemctl disable --now tempo-agent.service 2>/dev/null || true
+  fi
+fi
+
+if command -v busctl >/dev/null 2>&1 && [ -S /run/dbus/system_bus_socket ]; then
+  busctl call org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus ReloadConfig || true
+fi
+
+if [ -f /etc/tempo-agent/setup-complete ]; then
+  echo "Compasso atualizado e cliente configurado reiniciado."
+else
+  echo "Compasso instalado, mas ainda não iniciado."
+  echo "Abra Compasso e use a engrenagem para configurar e iniciar."
+fi

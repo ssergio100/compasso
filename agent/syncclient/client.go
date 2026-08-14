@@ -11,10 +11,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/sergio/compasso/agent/storage"
-	protocol "github.com/sergio/compasso/protocol/v1"
+	"github.com/ssergio100/compasso/agent/storage"
+	protocol "github.com/ssergio100/compasso/protocol/v1"
 )
 
 type Config struct {
@@ -22,29 +23,115 @@ type Config struct {
 	DeviceID          string
 	DeviceToken       string
 	HeartbeatInterval time.Duration
+	AttemptTimeout    time.Duration
+}
+
+const repeatedFailureLogInterval = time.Minute
+
+type heartbeatError struct {
+	stage string
+	err   error
+}
+
+func (e *heartbeatError) Error() string { return e.err.Error() }
+func (e *heartbeatError) Unwrap() error { return e.err }
+
+func heartbeatErrorStage(err error) string {
+	var failure *heartbeatError
+	if errors.As(err, &failure) {
+		return failure.stage
+	}
+	return "unknown"
 }
 
 type Client struct {
-	store  *storage.Store
-	http   *http.Client
-	config Config
-	now    func() time.Time
+	store                  *storage.Store
+	http                   *http.Client
+	config                 Config
+	now                    func() time.Time
+	graphicalSessionMu     sync.RWMutex
+	graphicalSessionActive bool
+	graphicalSessionID     string
+	graphicalSessionLocked bool
+	controlMu              sync.RWMutex
+	controlOnline          bool
+	controlPaused          bool
+	controlBlocked         bool
+	controlRevision        int64
+	statusReporter         func(error)
+}
+
+func (c *Client) RemoteControl() (online, paused, blocked bool) {
+	c.controlMu.RLock()
+	defer c.controlMu.RUnlock()
+	return c.controlOnline, c.controlPaused, c.controlBlocked
+}
+
+func (c *Client) setRemoteControl(online, paused, blocked bool, revision int64) {
+	c.controlMu.Lock()
+	c.controlOnline, c.controlPaused, c.controlBlocked = online, paused, blocked
+	c.controlRevision = revision
+	c.controlMu.Unlock()
+}
+
+// SetStatusReporter registers a process-local observer for synchronization
+// state transitions. Reports contain sanitized errors and never credentials.
+func (c *Client) SetStatusReporter(reporter func(error)) {
+	c.statusReporter = reporter
+}
+
+func (c *Client) reportStatus(err error) {
+	if c.statusReporter != nil {
+		c.statusReporter(err)
+	}
 }
 
 func New(store *storage.Store, httpClient *http.Client, config Config) (*Client, error) {
 	if store == nil || httpClient == nil {
 		return nil, errors.New("store and HTTP client are required")
 	}
-	if config.ServerURL == "" || config.DeviceID == "" || config.DeviceToken == "" || config.HeartbeatInterval <= 0 {
+	if config.ServerURL == "" || config.DeviceID == "" || config.DeviceToken == "" ||
+		config.HeartbeatInterval <= 0 || config.AttemptTimeout <= 0 {
 		return nil, errors.New("complete synchronization configuration is required")
 	}
 	config.ServerURL = strings.TrimRight(config.ServerURL, "/")
 	return &Client{store: store, http: httpClient, config: config, now: time.Now}, nil
 }
 
+// SetGraphicalSession reports the established graphical session observed by
+// logind. Heartbeat takes a consistent snapshot without depending on desktop
+// environment variables.
+func (c *Client) SetGraphicalSession(active bool, sessionID string, locked bool) {
+	if !active {
+		sessionID = ""
+		locked = false
+	}
+	c.graphicalSessionMu.Lock()
+	c.graphicalSessionActive = active
+	c.graphicalSessionID = sessionID
+	c.graphicalSessionLocked = locked
+	c.graphicalSessionMu.Unlock()
+}
+
+func (c *Client) graphicalSession() (bool, string, bool) {
+	c.graphicalSessionMu.RLock()
+	defer c.graphicalSessionMu.RUnlock()
+	return c.graphicalSessionActive, c.graphicalSessionID, c.graphicalSessionLocked
+}
+
 // Heartbeat performs one cycle. Durable events are removed only when their
 // identifiers are explicitly acknowledged by the server.
-func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.HeartbeatResponse, error) {
+func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.HeartbeatResponse, err error) {
+	stage := "local_state"
+	defer func() {
+		if err != nil {
+			c.setRemoteControl(false, false, false, 0)
+			var classified *heartbeatError
+			if !errors.As(err, &classified) {
+				err = &heartbeatError{stage: stage, err: err}
+			}
+		}
+	}()
 	if now.IsZero() {
 		return protocol.HeartbeatResponse{}, errors.New("heartbeat time is required")
 	}
@@ -56,6 +143,11 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 		return protocol.HeartbeatResponse{}, err
 	}
 	localDate := now.Format("2006-01-02")
+	graphicalSessionActive, graphicalSessionID, graphicalSessionLocked := c.graphicalSession()
+	c.controlMu.RLock()
+	controlRevision := c.controlRevision
+	c.controlMu.RUnlock()
+	confirmedState, hasConfirmedState := c.store.CurrentConfirmedSessionState()
 	usage, err := c.store.LoadDailyUsage(ctx, localDate)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -70,17 +162,28 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 	}
 	request := protocol.HeartbeatRequest{
 		PolicyRevision: revision, LocalDate: localDate, SecondsUsed: usage.SecondsUsed,
-		CommandAcks: commandAcks,
+		GraphicalSessionActive: graphicalSessionActive,
+		GraphicalSessionID:     graphicalSessionID,
+		GraphicalSessionLocked: graphicalSessionLocked,
+		ControlRevision:        controlRevision,
+		CommandAcks:            commandAcks,
 	}
+	if hasConfirmedState {
+		request.SessionStateRevision = confirmedState.Revision
+	}
+	request.RequestSessionState = graphicalSessionActive && (!hasConfirmedState ||
+		confirmedState.SessionID != graphicalSessionID || confirmedState.LocalDate != localDate ||
+		confirmedState.Revision < revision)
 	for _, event := range pending {
 		if !json.Valid([]byte(event.PayloadJSON)) {
-			_ = c.store.IncrementEventRetry(ctx, event.UUID)
+			_ = c.store.IncrementEventRetries(ctx, []string{event.UUID})
 			return protocol.HeartbeatResponse{}, fmt.Errorf("pending event %s contains invalid JSON", event.UUID)
 		}
 		request.Events = append(request.Events, protocol.PendingEvent{
 			UUID: event.UUID, Kind: event.Kind, Payload: json.RawMessage(event.PayloadJSON), CreatedAt: event.CreatedAt,
 		})
 	}
+	stage = "request"
 	body, err := json.Marshal(request)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -92,24 +195,27 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+c.config.DeviceToken)
 	httpRequest.Header.Set("X-Tempo-Device-ID", c.config.DeviceID)
+	stage = "transport"
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
+		c.http.CloseIdleConnections()
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("send heartbeat: %w", err)
+		return protocol.HeartbeatResponse{}, fmt.Errorf("send heartbeat: %s", redactSensitiveText(err.Error(), c.config.DeviceToken))
 	}
 	defer response.Body.Close()
+	stage = "response"
 	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		failure := decodeHeartbeatError(response.StatusCode, response.Body)
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("heartbeat returned HTTP %d", response.StatusCode)
+		return protocol.HeartbeatResponse{}, failure
 	}
-	var result protocol.HeartbeatResponse
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 512<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	result, err = decodeHeartbeatResponse(response.Body)
+	if err != nil {
 		c.recordRetries(ctx, pending)
-		return protocol.HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+		return protocol.HeartbeatResponse{}, err
 	}
+	stage = "apply"
+	c.setRemoteControl(true, result.Control.MonitoringPaused, result.Control.ManualBlock, result.Control.Revision)
 	for _, eventID := range result.AcknowledgedEvents {
 		if err := c.store.AcknowledgeEvent(ctx, eventID); err != nil {
 			return protocol.HeartbeatResponse{}, err
@@ -125,7 +231,69 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (protocol.Heartbe
 			return protocol.HeartbeatResponse{}, fmt.Errorf("apply command %s: %w", command.ID, err)
 		}
 	}
+	if request.RequestSessionState && result.SessionState == nil {
+		return protocol.HeartbeatResponse{}, errors.New("server did not return the requested session state")
+	}
+	if result.Policy != nil && graphicalSessionActive &&
+		result.Policy.Revision > request.SessionStateRevision && result.SessionState == nil {
+		return protocol.HeartbeatResponse{}, errors.New("server changed policy without confirming the active session balance")
+	}
+	if result.SessionState != nil {
+		if !graphicalSessionActive || result.SessionState.SessionID != graphicalSessionID ||
+			result.SessionState.LocalDate != localDate || result.SessionState.Revision < 0 ||
+			result.SessionState.RemainingSeconds < 0 || result.SessionState.UsageSeconds < 0 ||
+			result.SessionState.ConfirmedAt.IsZero() {
+			return protocol.HeartbeatResponse{}, errors.New("server returned an invalid session state")
+		}
+		if result.Policy != nil && result.SessionState.Revision < result.Policy.Revision {
+			return protocol.HeartbeatResponse{}, errors.New("server returned a session state older than its policy")
+		}
+		if err := c.store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+			Revision: result.SessionState.Revision, SessionID: result.SessionState.SessionID,
+			LocalDate:        result.SessionState.LocalDate,
+			RemainingSeconds: result.SessionState.RemainingSeconds,
+			UsageSeconds:     result.SessionState.UsageSeconds,
+			ConfirmedAt:      result.SessionState.ConfirmedAt,
+		}); err != nil {
+			return protocol.HeartbeatResponse{}, fmt.Errorf("store confirmed session state: %w", err)
+		}
+	}
 	return result, nil
+}
+
+func decodeHeartbeatError(status int, responseBody io.Reader) error {
+	var response protocol.ErrorResponse
+	decoder := json.NewDecoder(io.LimitReader(responseBody, 4096))
+	if err := decoder.Decode(&response); err == nil && response.Code == "revision_ahead" {
+		return fmt.Errorf(
+			"heartbeat rejected: local revision %d is newer than server revision %d; local state belongs to another enrollment or the server was restored from an older backup",
+			response.ClientRevision, response.ServerRevision,
+		)
+	}
+	if status == http.StatusConflict {
+		return errors.New("heartbeat rejected because local synchronization state is newer than the device on the server; local state may belong to another enrollment or the server may have been restored from an older backup")
+	}
+	return fmt.Errorf("heartbeat returned HTTP %d", status)
+}
+
+func decodeHeartbeatResponse(responseBody io.Reader) (protocol.HeartbeatResponse, error) {
+	var heartbeatResponse protocol.HeartbeatResponse
+	decoder := json.NewDecoder(io.LimitReader(responseBody, 512<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&heartbeatResponse); err != nil {
+		return protocol.HeartbeatResponse{}, fmt.Errorf("decode heartbeat response: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return protocol.HeartbeatResponse{}, errors.New("decode heartbeat response: trailing JSON data")
+	}
+	return heartbeatResponse, nil
+}
+
+func redactSensitiveText(message, secret string) string {
+	if secret == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, secret, "[REDACTED]")
 }
 
 func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now time.Time) error {
@@ -158,9 +326,14 @@ func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now
 }
 
 func (c *Client) recordRetries(ctx context.Context, events []storage.PendingEvent) {
-	for _, event := range events {
-		_ = c.store.IncrementEventRetry(ctx, event.UUID)
+	if len(events) == 0 {
+		return
 	}
+	ids := make([]string, len(events))
+	for index, event := range events {
+		ids[index] = event.UUID
+	}
+	_ = c.store.IncrementEventRetries(ctx, ids)
 }
 
 func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
@@ -168,9 +341,16 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		logger = log.Default()
 	}
 	delay := time.Duration(0)
-	backoff := time.Second
+	initialBackoff := time.Second
+	if c.config.HeartbeatInterval < initialBackoff {
+		initialBackoff = c.config.HeartbeatInterval
+	}
+	backoff := initialBackoff
 	online := false
 	first := true
+	attempts := 0
+	var offlineSince time.Time
+	var lastFailureLog time.Time
 	for {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
@@ -181,13 +361,37 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 			case <-timer.C:
 			}
 		}
-		_, err := c.Heartbeat(ctx, c.now())
+		attemptStarted := time.Now()
+		attemptContext, cancelAttempt := context.WithTimeout(ctx, c.config.AttemptTimeout)
+		_, err := c.Heartbeat(attemptContext, c.now())
+		cancelAttempt()
+		attemptFinished := time.Now()
+		attemptDuration := attemptFinished.Sub(attemptStarted)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			attempts++
 			if online || first {
-				logger.Printf("synchronization offline: %v", err)
+				offlineSince = attemptFinished
+				lastFailureLog = attemptFinished
+				logger.Printf("synchronization offline stage=%s attempt=%d duration=%s: %v",
+					heartbeatErrorStage(err), attempts, attemptDuration.Round(time.Millisecond), err)
+				c.reportStatus(err)
+			} else if attemptFinished.Sub(lastFailureLog) >= repeatedFailureLogInterval {
+				lastFailureLog = attemptFinished
+				logger.Printf("synchronization still offline stage=%s attempts=%d offline_for=%s last_attempt=%s: %v",
+					heartbeatErrorStage(err), attempts, attemptFinished.Sub(offlineSince).Round(time.Second),
+					attemptDuration.Round(time.Millisecond), err)
 			}
 			online, first = false, false
-			delay = backoff
+			// Keep retry cadence measured from the start of the failed attempt.
+			// A request that consumed its whole timeout must not add another full
+			// backoff before the next try.
+			delay = backoff - attemptDuration
+			if delay < 0 {
+				delay = 0
+			}
 			backoff *= 2
 			if backoff > c.config.HeartbeatInterval {
 				backoff = c.config.HeartbeatInterval
@@ -195,10 +399,19 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 			continue
 		}
 		if !online {
-			logger.Printf("synchronization online")
+			if attempts == 0 {
+				logger.Printf("synchronization online")
+			} else {
+				logger.Printf("synchronization online attempts=%d offline_for=%s",
+					attempts, attemptFinished.Sub(offlineSince).Round(time.Second))
+			}
+			c.reportStatus(nil)
 		}
 		online, first = true, false
-		backoff = time.Second
+		attempts = 0
+		offlineSince = time.Time{}
+		lastFailureLog = time.Time{}
+		backoff = initialBackoff
 		delay = c.config.HeartbeatInterval
 	}
 }

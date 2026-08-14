@@ -7,7 +7,7 @@
 | **Status**                  | Especificação funcional consolidada                                                                   |
 |-----------------------------|-------------------------------------------------------------------------------------------------------|
 | **Data-base**               | 08 de agosto de 2026                                                                                  |
-| **Plataforma-alvo inicial** | Linux desktop com systemd/logind/PAM                                                                  |
+| **Plataforma-alvo inicial** | Linux desktop com systemd/logind                                                                      |
 | **Objetivo**                | Controle confiável de cota diária, rotinas e intervenções administrativas, funcionando também offline |
 
 > **Princípio central —** O servidor distribui políticas e recebe telemetria, mas o computador cliente continua capaz de decidir e aplicar todas as restrições com a última configuração válida mesmo sem Internet.
@@ -47,7 +47,9 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Encerrar a sessão do usuário controlado quando uma regra de bloqueio entrar em vigor.
 
-- Impedir que o usuário controlado simplesmente faça login novamente enquanto a política continuar bloqueando o acesso.
+- Permitir que o usuário controlado autentique novamente, mas encerrar de forma
+  segura a nova sessão depois que ela estiver estabelecida enquanto a política
+  continuar bloqueando o acesso.
 
 - Permitir bloqueio imediato por comando remoto.
 
@@ -68,9 +70,10 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 | **Termo**           | **Definição**                                                                                                                                        |
 |---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Agente              | Serviço privilegiado executado no cliente Linux. É a autoridade local para avaliar regras, contabilizar tempo, persistir estado e aplicar bloqueios. |
-| Servidor            | Aplicação central que hospeda a interface web, API, usuários administrativos, configuração e histórico.                                              |
+| Servidor / backend  | Aplicação central que expõe a API, autentica usuários e dispositivos, aplica configurações e persiste o histórico. Não hospeda a interface web.       |
+| Frontend administrativo | Aplicação web independente que consome somente a API JSON do servidor e possui build e implantação próprios.                                      |
 | Cota diária         | Quantidade-base de tempo permitida para um dia da semana.                                                                                            |
-| Tempo extra / bônus | Acréscimo pontual ao saldo do dia corrente. Não altera a cota permanente do dia da semana e não ignora rotinas.                                      |
+| Tempo extra / bônus | Acréscimo pontual ao tempo restante do dia corrente. Não altera a cota diária configurada e não ignora rotinas.                                        |
 | Rotina              | Janela recorrente de bloqueio, associada a nome, dias da semana, horário inicial e horário final.                                                    |
 | Vigilância ativa    | Estado normal: regras são aplicadas e o tempo permitido é contabilizado.                                                                             |
 | Vigilância pausada  | Override administrativo: computador liberado, rotinas ignoradas e tempo diário não contabilizado.                                                    |
@@ -84,9 +87,12 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Cada dia da semana terá uma cota configurável individualmente, incluindo valor zero.
 
-- A cota é uma configuração permanente semanal; o saldo do dia é calculado a partir da cota, bônus e consumo.
+- A cota é uma configuração permanente semanal; o tempo restante base é a cota do dia menos o tempo utilizado.
 
-- Ao atingir saldo zero, a sessão controlada deve ser encerrada e novos logins devem ser recusados enquanto o bloqueio permanecer válido.
+- Ao atingir saldo zero, a sessão controlada deve ser encerrada. Enquanto o
+  bloqueio permanecer válido, uma nova autenticação é permitida, mas a sessão
+  gráfica estabelecida deve receber logout seguro e retornar normalmente ao
+  greeter.
 
 - Uma alteração remota da cota do dia atual entra em vigor assim que for sincronizada, podendo aumentar ou reduzir imediatamente o saldo restante.
 
@@ -94,9 +100,9 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 
 - Pode ser concedido remotamente pela interface web ou localmente mediante senha do responsável.
 
-- É pontual e associado ao dia corrente; não modifica a cota semanal configurada.
+- É pontual e associado ao dia corrente; aumenta o tempo restante sem modificar a cota semanal configurada.
 
-- É somado ao saldo de uso, mas não tem precedência sobre rotinas.
+- Depois de concedido, é consumido junto com o restante do dia, mas não tem precedência sobre rotinas.
 
 - Se uma rotina começar, o computador bloqueia mesmo que ainda existam minutos de bônus; o saldo volta a estar disponível ao final da rotina.
 
@@ -107,6 +113,8 @@ O projeto tem como objetivo controlar o tempo de utilização de um computador L
 - Cada rotina possui nome, dias da semana e intervalo de horário.
 
 - Deve aceitar intervalos que atravessam a meia-noite, por exemplo 22:00–08:00.
+
+- Rotinas não podem se sobrepor, inclusive na meia-noite e na passagem de domingo para segunda-feira. O horário inicial pertence à rotina e o horário final não pertence; portanto, uma rotina pode começar exatamente quando outra termina.
 
 - Uma rotina bloqueia independentemente de saldo diário ou bônus.
 
@@ -175,7 +183,9 @@ O motor de política deve ser determinístico. Para uma mesma entrada de estado,
    SIM -> BLOQUEADO.
    NÃO -> continuar.
 
-4. Saldo diário = cota + bônus - consumo está esgotado?
+4. Calcular tempo restante base = cota diária - tempo utilizado.
+   Somar ao tempo restante os acréscimos de tempo extra concedidos no dia.
+   O tempo restante está esgotado?
    SIM -> BLOQUEADO.
    NÃO -> LIBERADO e contabiliza tempo.
 ```
@@ -185,17 +195,19 @@ O motor de política deve ser determinístico. Para uma mesma entrada de estado,
 # 5. Arquitetura proposta
 
 ```text
-                 INTERNET
+        REDE / ACESSO ESCOLHIDO
                     |
-                    v
-        +-------------------------+
-        |      TEMPO SERVER       |
-        |     Web + API + banco   |
-        +------------+------------+
-                     |
-                 HTTPS / JSON
-                     |
-                     v
+          +---------+----------+
+          |                    |
+          v                    v
+ +------------------+  +-------------------------+
+ | ADMIN FRONTEND   |  |       TEMPO API         |
+ | endereço config. +->| endereço config. + banco|
+ +------------------+  +------------+------------+
+                                   |
+                               HTTPS / JSON
+                                   |
+                                   v
         +-------------------------+
         |      TEMPO AGENT        |  root
         | motor de política       |
@@ -203,7 +215,7 @@ O motor de política deve ser determinístico. Para uma mesma entrada de estado,
         | sync / enforcement      |
         +------+-------------+----+
                |             |
-           D-Bus|             | logind / PAM
+           D-Bus|             | logind
                v             v
         +-------------+   sessão Linux
         | TEMPO LOCAL |
@@ -215,11 +227,22 @@ A separação de responsabilidades reduz a superfície de ataque e facilita test
 
 - O agente é a única autoridade local sobre regras e estado persistente.
 
+- O agente é instalado diretamente no sistema operacional da máquina
+  monitorada e executado pelo `systemd`. Ele não roda em Docker e não exige que
+  Docker esteja instalado no cliente.
+
 - A interface local roda sem privilégios e solicita operações ao agente via D-Bus.
 
-- O servidor é a autoridade de configuração, mas não é necessário para executar a política já sincronizada.
+- O backend é a autoridade de configuração, mas não é necessário para executar a política já sincronizada.
 
-- A camada de enforcement usa mecanismos nativos do Linux (systemd-logind e PAM) em vez de depender apenas de janelas gráficas que o usuário poderia fechar.
+- O frontend administrativo é um artefato independente e se comunica com o backend exclusivamente pela API JSON versionada.
+
+- O backend não renderiza HTML, não serve arquivos do frontend e pode ser compilado, testado e implantado sem eles.
+
+- A camada de enforcement usa `systemd-logind` para identificar sessões e um
+  helper executado no D-Bus do usuário para descobrir uma capacidade de logout
+  normal. O núcleo não identifica o ambiente gráfico pelo nome e não encerra a
+  sessão à força se nenhum adaptador compatível estiver disponível.
 
 # 6. Tecnologias adotadas
 
@@ -227,19 +250,25 @@ A separação de responsabilidades reduz a superfície de ataque e facilita test
 |----------------------------|-----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Agente e servidor          | Go 1.26.x                   | Binário simples, boa concorrência, HTTP/TLS maduros, testes rápidos e baixa dependência de runtime. Linha 1.26 é a estável atual em agosto/2026 [T1]. |
 | Serviço Linux              | systemd                     | Inicialização no boot, restart automático, logs pelo journal, dependências e hardening de serviço.                                                      |
-| Controle de sessão         | systemd-logind + D-Bus      | Permite identificar e terminar sessões de forma integrada ao sistema.                                                                                   |
-| Bloqueio de novo login     | PAM                         | Gate de autenticação para impedir relogin do usuário controlado enquanto o agente informar estado bloqueado.                                            |
+| Controle de sessão         | systemd-logind              | Identifica a sessão gráfica local e seu estado sem interferir na autenticação.                                                                          |
+| Logout de sessão           | D-Bus da sessão gráfica     | Descobre capacidades de logout normal por adaptadores extensíveis, sem condicionar o núcleo ao ambiente gráfico; falhas nunca encerram a sessão abruptamente. |
 | Persistência local         | SQLite 3.x                  | Banco autocontido, transacional e robusto para política, consumo, fila de eventos e estado offline. SQLite 3.53.x é a linha atual em 2026 [T2].       |
 | Persistência servidor v0.1 | SQLite 3.x                  | Suficiente para poucos dispositivos/administradores e simplifica implantação. Esquema preparado para migração futura para PostgreSQL.                   |
 | IPC local                  | D-Bus system bus            | Canal Linux nativo para interface não privilegiada solicitar operações ao daemon com políticas de autorização [T3].                                   |
 | UI local                   | Python 3 + PyGObject/GTK 4  | Interface nativa pequena, fácil integração com D-Bus e notificações. GTK 4 é a API atual da família [T4].                                             |
-| Web                        | HTML server-side + HTMX 2.x | Sem SPA pesada ou build obrigatório; atualizações parciais e interface responsiva com JavaScript mínimo.                                                |
+| Frontend administrativo    | HTML, CSS e JavaScript independentes | Aplicação separada do backend; começa simples e pode migrar para React ou outra tecnologia sem alterar o servidor.                              |
 | CSS/UI web                 | Bootstrap 5.3.x             | Componentes, formulários e layout responsivo estáveis; linha 5.3.8 é a atual no momento da especificação [T5].                                        |
 | Senha local                | Argon2id                    | Verificador de senha resistente a ataques offline; somente hash/verificador é sincronizado.                                                             |
 | Transporte                 | HTTPS + JSON                | API simples, inspecionável e fácil de testar. Em produção, TLS obrigatório.                                                                             |
 | Reverse proxy produção     | Caddy 2 (recomendado)       | Simplifica TLS automático e proxy para o serviço Go; não é dependência lógica do domínio.                                                               |
 
-> **Decisão de simplicidade —** Não usar React, Vue, Angular, Node.js como requisito de runtime nem broker MQTT na v0.1. O heartbeat HTTP é suficiente para o volume e a latência esperada.
+> **Decisão de simplicidade —** A independência do frontend não exige adotar React, Vue ou Angular agora. A primeira extração reaproveitará HTML, CSS e JavaScript simples. Node.js não será requisito de runtime do servidor, e o heartbeat HTTP continua suficiente para o volume e a latência esperada.
+
+> **Fronteira de implantação —** Em produção, somente o servidor é executado em
+> Docker. O agente e a interface local são componentes nativos da
+> máquina monitorada. Um contêiner pode ser usado na máquina de desenvolvimento
+> apenas para compilar os binários portáteis; ele não faz parte do pacote nem é
+> uma dependência do cliente.
 
 # 7. Agente Linux e integração com o sistema
 
@@ -248,6 +277,8 @@ A separação de responsabilidades reduz a superfície de ataque e facilita test
 - Executável: `tempo-agent`.
 
 - Usuário: root, iniciado por unidade systemd dedicada.
+
+- Implantação: binário nativo; Docker é proibido como runtime do agente.
 
 - Reinício automático em falha e inicialização antes de sessões gráficas normais.
 
@@ -267,13 +298,24 @@ Será implementado como pacote Go puro, sem dependência de systemd, HTTP ou SQL
 
 - Rotinas que atravessam meia-noite devem ser resolvidas no próprio motor.
 
-## 7.3 Logout e prevenção de relogin
+## 7.3 Logout seguro após relogin
 
-- Quando a decisão muda de liberado para bloqueado, o agente solicita ao logind o encerramento da sessão do usuário controlado.
+- Quando a decisão muda de liberado para bloqueado, o agente delega à sessão do
+  usuário uma solicitação de logout normal descoberta por capacidade.
 
-- Um gate PAM consulta um helper local do agente durante nova autenticação. Se a política estiver bloqueando, retorna falha e impede login.
+- Uma nova autenticação do usuário controlado não é recusada. Se a política
+  continuar bloqueando, o agente espera a sessão gráfica ficar estabelecida e
+  então aguarda a primeira sincronização concluída depois desse login. Se a
+  resposta trouxer saldo, a sessão permanece; se o estado atualizado continuar
+  bloqueado, o agente solicita seu logout.
 
-- O gate deve ser instalado com backup e validação da configuração PAM para evitar quebrar o login do sistema inteiro.
+- Uma falha de conexão não é tratada como resposta do servidor. Enquanto não
+  houver heartbeat concluído depois do login, a sessão permanece aberta e o
+  agente continua tentando sincronizar.
+
+- O agente não deve encerrar uma sessão durante a transição entre o greeter e
+  o desktop. O resultado obrigatório é voltar à tela de login operacional,
+  nunca permanecer em tela preta apenas com o cursor.
 
 - O usuário administrativo/root do sistema não será submetido à política da conta controlada.
 
@@ -423,7 +465,7 @@ Próximo bloqueio: 22:00 — Hora de dormir
 
 - Lista resumida das rotinas ativas com edição e exclusão.
 
-- Validar conflitos sem proibir sobreposição: duas rotinas simultâneas continuam resultando em bloqueio.
+- Impedir a criação ou edição de intervalos sobrepostos e informar qual rotina já ocupa o horário.
 
 ## 11.5 Segurança local
 
@@ -503,6 +545,13 @@ Senha do responsável
 > **Evolução —** O esquema do servidor deve usar chaves e tipos que permitam migração futura para PostgreSQL sem alterar o contrato da API.
 
 # 15. API e eventos
+
+O frontend administrativo acessa todas as funções exclusivamente por esta API
+JSON. O backend não oferece páginas HTML nem depende dos arquivos do frontend.
+Quando frontend e API usam origens distintas, o CORS fica restrito à origem
+administrativa configurada, com cookie seguro sob HTTPS e proteção CSRF para
+operações mutáveis. IPs, hostnames e domínios são definidos pela infraestrutura,
+não pelo código da aplicação.
 
 | **Endpoint conceitual**           | **Método** | **Uso**                                                                           |
 |-----------------------------------|------------|-----------------------------------------------------------------------------------|
@@ -629,7 +678,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - Contabilizar somente em estado permitido.
 
-- Aplicar logout por logind.
+- Aplicar logout normal por capacidade publicada na sessão gráfica.
 
 **Testes de saída da fase**
 
@@ -643,29 +692,61 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [x] Pausa recebida antes do bloqueio impede logout e para contador (teste automatizado).
 
-## Fase 4 — Gate PAM contra relogin
+- [x] O helper descobre capacidades de logout no D-Bus da sessão, sem consultar
+  o nome do ambiente gráfico e sem fallback para `loginctl terminate-session`
+  (teste automatizado).
+
+## Fase 4 — Logout seguro após relogin
 
 **Entregas**
 
-- Implementar helper mínimo de consulta ao estado do agente.
+- Permitir a autenticação mesmo quando a política estiver bloqueando.
 
-- Integrar pam_exec ou módulo equivalente no fluxo do display manager alvo.
+- Detectar quando a nova sessão gráfica estiver estabelecida antes de aplicar
+  o logout.
 
-- Criar instalador com backup/reversão segura.
+- Solicitar um logout que devolva o controle ao greeter disponível sem tela
+  preta, sem condicionar a lógica ao nome do display manager.
 
 **Testes de saída da fase**
 
-- [x] Estado liberado permite login do usuário controlado (helper automatizado; login real pendente no Zorin).
+- [ ] Estado bloqueado permite autenticar e concluir a abertura da sessão gráfica.
 
-- [x] Estado bloqueado recusa login do usuário controlado (helper automatizado; login real pendente no Zorin).
+- [x] O daemon não encerra uma sessão com estado `opening` e aguarda dez
+  segundos de estabilização após o estado `active` (teste automatizado com
+  logind simulado).
 
-- [x] Conta root/responsável não é bloqueada por engano (teste automatizado com conta fora do controle).
+- [x] O agente delega o logout ao helper neutro da sessão; os adaptadores são
+  escolhidos pelas capacidades publicadas e uma falha não provoca encerramento
+  abrupto (teste automatizado).
 
-- [x] Agente indisponível usa estado SQLite; erro de estado segue `fail-open` (teste automatizado).
+- [x] Debian 13: `systemd-run --user --machine=<conta>@.host` alcançou o D-Bus
+  do usuário, listou a capacidade de logout e terminou com código zero, sem
+  alterar a sessão (teste real com timeout de segurança).
 
-- [x] Desinstalação restaura configuração PAM original (teste automatizado byte a byte).
+- [x] Debian 13 KDE: o novo `compasso-session-logout -probe` foi executado pelo
+  serviço privilegiado dentro da sessão do usuário, descobriu o adaptador
+  `plasma-session` e terminou em 70 ms com código zero, sem efetuar logout.
 
-- [ ] No Zorin, o GDM aplica o gate ao login real e permanece operacional após instalação e remoção.
+- [x] Uma sessão nova sem saldo aguarda um heartbeat concluído depois do login;
+  permanece aberta se a resposta acrescentar tempo e recebe logout se continuar
+  bloqueada (testes automatizados).
+
+- [ ] Depois de estabelecida, a sessão bloqueada recebe logout e retorna ao greeter em máquina real.
+
+- [ ] O greeter permanece operacional, sem tela preta com cursor, depois do
+  logout; SDDM no Debian 13 validado, GDM ainda pendente.
+
+- [x] Debian 13 KDE/SDDM: chamada real pelo `compasso-session-logout` encerrou
+  normalmente a sessão e permitiu novo login com o desktop completo, sem tela
+  preta.
+
+- [ ] Conta root/responsável não tem sua sessão encerrada por engano.
+
+> **Requisito substituído —** O protótipo anterior de gate PAM foi validado
+> por testes automatizados, mas não foi ativado pelo pacote piloto. A decisão
+> atual permite a autenticação e torna esse gate incompatível com a experiência
+> definida para a v0.1.
 
 ## Fase 5 — Alertas de sessão
 
@@ -713,7 +794,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [x] No Zorin, o diálogo GTK abre, oculta a senha e sinaliza corretamente que o agente está indisponível.
 
-- [ ] No Zorin, o diálogo GTK adiciona bônus pelo D-Bus e apresenta sucesso, senha incorreta e rate limit.
+- [x] No Zorin, o diálogo GTK adiciona bônus pelo D-Bus e apresenta sucesso, senha incorreta e rate limit.
 
 ## Fase 7 — Servidor, autenticação e painel web
 
@@ -769,6 +850,27 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [x] No Zorin, o pareamento e as transições online, offline e reconectado são aprovados no painel.
 
+- [x] Fluxo agente–servidor corrigido: o servidor entrega uma âncora de saldo na
+  autorização da sessão; o agente desconta somente uso posterior e heartbeats
+  sem mudança não reinicializam o contador (testes integrados automatizados).
+
+- [x] Log real do `pilot6` confirmou que o painel confundia agente online com
+  sessão gráfica ativa: após o encerramento da sessão, o servidor ainda animava
+  o contador.
+
+- [x] O heartbeat agora transporta presença da sessão gráfica separadamente do
+  estado online; o painel só anima os contadores quando ambos estiverem ativos
+  (testes HTTP e de persistência automatizados).
+
+- [x] Bônus remoto cria nova revisão e nova âncora; bônus local concedido durante
+  um heartbeat em andamento não é apagado pela resposta (testes integrados e de
+  persistência automatizados).
+
+- [x] A autorização combina um namespace privado do ciclo do serviço com a
+  sessão do logind, impedindo que um identificador reutilizado após reboot ou
+  parada explícita herde saldo autorizado para uma sessão anterior (teste
+  automatizado da identidade).
+
 ## Fase 9 — Segurança e hardening
 
 **Entregas**
@@ -783,49 +885,153 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 **Testes de saída da fase**
 
-- [ ] Usuário comum não consegue alterar SQLite/config do agente.
+- [x] Usuário comum não consegue alterar SQLite/config do agente (teste real no Zorin após instalação root).
 
-- [ ] Usuário comum não consegue parar serviço.
+- [x] Usuário comum não consegue parar serviço (teste real no Zorin; systemd exigiu autenticação e o serviço permaneceu ativo).
 
-- [ ] Token revogado deixa de autenticar.
+- [x] Token revogado deixa de autenticar (teste automatizado de persistência e autenticação).
 
-- [ ] Logs não contêm senha/token.
+- [x] Logs não contêm senha/token (testes automatizados de sanitização e auditoria).
 
-- [ ] Fuzz/testes de payload inválido não derrubam servidor ou agente.
+- [x] Fuzz/testes de payload inválido não derrubam servidor ou agente (2.016.257 execuções de fuzz no Zorin, além do corpus automatizado).
 
 ## Fase 10 — Teste ponta a ponta e piloto
 
 **Entregas**
 
-- Instalar em máquina Linux real usada como cliente.
+- Instalar em máquinas Linux reais com GNOME/GDM e KDE/SDDM.
 
 - Executar cenários de uma semana acelerada com mudanças remotas e offline.
 
 - Validar UX com jogos e avisos.
 
-- Criar pacote de instalação e rollback.
+- Criar pacote de instalação e rollback sem compilação ou edição manual no
+  cliente. Dependências ausentes devem ser apresentadas e instaladas pelo
+  gerenciador de pacotes somente após autorização administrativa.
+
+- Manter o cliente independente de uma distribuição ou ambiente gráfico
+  específico dentro do escopo systemd e logind. O plano incremental está
+  em `docs/portable-client-plan.md`.
+
+- Separar completamente o frontend administrativo do backend. O plano de
+  migração incremental está em `docs/admin-frontend-decoupling-plan.md`.
+
+- Distribuir servidor e frontend em um único pacote Docker Compose, mantendo
+  API e frontend em contêineres independentes. Túnel, proxy, VPN, DNS, TLS e a
+  decisão de expor ou não o servidor pertencem exclusivamente à infraestrutura
+  escolhida pelo usuário. O plano está em `docs/server-compose-plan.md`.
 
 **Testes de saída da fase**
 
-- [ ] Ciclo completo: cota -> alerta -> logout -> bloqueio de login -> bônus -> retorno.
+- [x] Ciclo real completo no `pilot12`: cota -> alertas -> logout -> retorno ao
+  SDDM sem tela preta -> tempo extra -> novo login -> alertas -> segundo logout
+  limpo.
+
+- [x] Alerta do `pilot11` entregue na sessão real do Debian 13 KDE antes do fim
+  da cota; o canal de notificação e a apresentação visual foram aprovados.
+
+- [ ] Acrescentar som confiável ao alerta; no KDE a apresentação visual foi
+  aprovada, mas a dica de áudio enviada pelo agente não produziu som.
+
+- [x] Alerta visual fixo de cinco minutos apareceu no ciclo real do `pilot12`
+  com tempo extra; o áudio continuou ausente.
+
+- [x] Alerta visual fixo de um minuto apareceu no ciclo real do `pilot12` com
+  tempo extra.
+
+- [x] Saldo confirmado de três segundos é consumido continuamente até zero sem
+  consultar a cota de oito horas armazenada localmente (teste automatizado do
+  daemon sincronizado).
 
 - [ ] Rotina -> alerta -> bloqueio -> fim da rotina -> login permitido com saldo preservado.
 
-- [ ] Pausa -> uso sem consumo -> retomar -> política aplicada imediatamente.
+- [x] Durante a rotina **Dormir**, o `pilot12` permitiu autenticar e depois
+  executou logout seguro mesmo com tempo extra disponível (teste real).
+
+- [x] Pausa -> uso sem consumo -> retomar -> política aplicada imediatamente (teste real no Zorin).
 
 - [ ] Reboot offline mantém restrições.
 
-- [ ] Atualização de senha sincroniza e senha antiga deixa de funcionar.
+- [x] Atualização de senha sincroniza e senha antiga deixa de funcionar (teste integrado automatizado, inclusive falha de sincronização offline).
 
-- [ ] Instalação e desinstalação não deixam o sistema sem login.
+- [ ] Instalação, logout e desinstalação não deixam o sistema sem greeter operacional.
+
+- [ ] Pacote `.deb` instala no Zorin e Debian 13 KDE sem Go ou `libgo` no cliente.
+
+- [x] Cliente `pilot9` instalado no Debian 13 KDE pela interface; permaneceu
+  offline como projetado, sem reutilizar credenciais antigas nem iniciar o
+  serviço antes da nova confirmação.
+
+- [x] Início do `pilot9` após a configuração revelou falha antes da
+  sincronização: `ProcSubset=pid` ocultava o arquivo `boot_id` lido pelo agente.
+  O artefato foi invalidado e a causa reproduzida pelo journal.
+
+- [x] Cliente `pilot10` inicia no Debian 13 KDE mantendo
+  `ProtectProc=invisible` e `ProcSubset=pid`, alcança o servidor por HTTPS e
+  registra a recusa de credencial como HTTP 401.
+
+- [x] Cliente `pilot10` gerado e validado sem instalação, com namespace privado
+  em `RuntimeDirectory`, binários portáteis, dependências e AppStream válidos.
+
+- [x] Reconfiguração do `pilot10` revelou que `enable --now` não reiniciava um
+  agente já ativo; o token novo era salvo, mas o processo continuava usando o
+  anterior. O artefato foi invalidado.
+
+- [x] Cliente `pilot11` reinicia após reconfiguração e a interface só confirma
+  sucesso depois de um heartbeat aceito no Debian 13 KDE (teste real; agente
+  online).
+
+- [x] Cliente `pilot11` gerado e validado sem instalação.
+
+- [x] Ensaio real do `pilot11` atingiu o fim da cota, mas o logout normal falhou
+  com `orderly logout request failed for session 26: exit status 1`; o agente
+  falhou de forma segura e manteve a sessão aberta, sem tela preta.
+
+- [x] A diferença entre o probe anterior, executado depois de uma introspecção,
+  e o probe da sessão nova mostrou que a descoberta considerava somente nomes
+  D-Bus com proprietário naquele instante; `busctl --user list` confirmou
+  `org.kde.Shutdown` registrado para ativação na sessão real.
+
+- [x] Descoberta corrigida para reconhecer serviços D-Bus ativos ou ativáveis,
+  mantendo a seleção por capacidade e sem detectar o nome do desktop (teste
+  automatizado).
+
+- [x] Cliente `pilot12` encerra a sessão KDE ao fim da cota mesmo quando o
+  provedor de logout ainda não está ativo (teste real).
+
+- [x] Após o logout do `pilot12`, o SDDM aparece sem tela preta (teste real).
+
+- [x] Após o logout do `pilot12`, um novo login conclui normalmente; o saldo
+  extra é aplicado e termina em novo logout limpo (teste real).
+
+- [x] Cliente `pilot12` gerado e validado sem instalação.
+
+- [x] Configuração inicial do agente é concluída pela interface, sem terminal
+  (teste real do `pilot11` no Debian 13 KDE).
+
+- [x] Backend compila e executa sem templates ou arquivos do frontend.
+
+- [x] Frontend administrativo usa somente a API JSON e possui build e
+  implantação independentes.
+
+- [x] Alterações visuais são aplicadas sem recompilar ou reiniciar o backend.
+
+- [x] Pacote Docker Compose do servidor instala no Dell Debian 13 sem solicitar
+  credenciais; primeiro administrador é configurado depois pelo navegador e o
+  painel funciona pela LAN (teste real do `pilot2`).
+
+- [x] Servidor `pilot4` atualizado no Dell pelo procedimento com backup e
+  reconstrução do Compose, antes do ensaio do cliente `pilot9` (teste real).
 
 # 19. Critérios de aceite da v0.1
 
 - [ ] O computador aplica corretamente cota e rotinas sem depender da Internet.
 
-- [ ] Fim de cota e início de rotina encerram a sessão do usuário controlado.
+- [x] Fim de cota e início de rotina encerram a sessão do usuário controlado
+  (testes reais do `pilot12`).
 
-- [ ] O usuário controlado não consegue relogar enquanto a política bloquear.
+- [x] Ao relogar durante um bloqueio, o usuário entra, recebe logout seguro e
+  retorna à tela de login sem tela preta (teste real com a rotina **Dormir**).
 
 - [ ] Cotas são independentes por dia da semana.
 
@@ -833,13 +1039,22 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Tempo extra local e remoto aumenta saldo, mas nunca ignora rotinas.
 
-- [ ] Pausar vigilância libera o uso, ignora rotinas/cota e não desconta tempo.
+- [x] Tempo extra disponível não ignorou a rotina **Dormir** ativa (teste real
+  do `pilot12`; ainda falta cobrir separadamente as duas origens do bônus).
 
-- [ ] Retomar vigilância aplica imediatamente a situação corrente.
+- [x] Registrar novo requisito: tempo extra remanescente ou não utilizado deve
+  ser zerado em alguma circunstância de expiração.
+
+- [ ] Definir em discussão futura qual evento zera o tempo extra remanescente;
+  nenhuma regra de expiração deve ser implementada antes dessa decisão.
+
+- [x] Pausar vigilância libera o uso, ignora rotinas/cota e não desconta tempo (teste real no Zorin).
+
+- [x] Retomar vigilância aplica imediatamente a situação corrente (teste real no Zorin).
 
 - [ ] Bloqueio manual remoto é efetivo dentro da latência de heartbeat esperada.
 
-- [ ] Alertas previsíveis são exibidos antes do bloqueio.
+- [x] Alertas previsíveis são exibidos antes do bloqueio (teste real de fim de cota no Zorin).
 
 - [ ] Senha local é definida remotamente, funciona offline e nunca é armazenada em texto puro.
 
@@ -847,7 +1062,7 @@ A implementação deve avançar em incrementos pequenos. Cada fase só é consid
 
 - [ ] Eventos locais offline sincronizam sem duplicação.
 
-- [ ] O painel informa estado online/offline, saldo, próximo bloqueio e histórico essencial.
+- [x] O painel informa estado online/offline, saldo, próximo bloqueio e histórico essencial (testes reais das fases 7, 8 e 10).
 
 - [ ] Reboot, crash do agente e perda de Internet não devolvem controle indevido ao usuário.
 
@@ -871,7 +1086,7 @@ As escolhas tecnológicas foram conferidas contra documentação oficial dispon�
 | **Cenário**                                     | **Resultado esperado**                                                |
 |-------------------------------------------------|-----------------------------------------------------------------------|
 | Saldo disponível, sem rotina, vigilância ativa  | Liberado; contador corre.                                             |
-| Saldo zerado                                    | Bloqueado; sessão encerrada; login negado.                            |
+| Saldo zerado                                    | Bloqueado; relogin permitido; nova sessão recebe logout seguro e retorna ao greeter. |
 | Saldo zerado + bônus 30 min                     | Liberado por até 30 min, desde que não exista rotina.                 |
 | Bônus disponível + rotina ativa                 | Bloqueado; bônus permanece para depois.                               |
 | Rotina ativa + vigilância pausada               | Liberado; contador parado.                                            |

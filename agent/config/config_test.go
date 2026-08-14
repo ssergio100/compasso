@@ -40,3 +40,42 @@ func TestLoadRequiresControlledUser(t *testing.T) {
 		t.Fatal("expected missing controlled_user to fail")
 	}
 }
+
+func TestLoadRejectsUnknownAndDuplicateKeys(t *testing.T) {
+	for name, extra := range map[string]string{
+		"unknown":   `log_level = "debug"`,
+		"duplicate": `controlled_user = "other"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agent.toml")
+			contents := "database_path = \"/tmp/agent.db\"\ncontrolled_user = \"child\"\n" + extra
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatalf("configuration accepted %s key", name)
+			}
+		})
+	}
+}
+
+func TestValidateRequiresHTTPSForRemoteSynchronization(t *testing.T) {
+	configuration := Config{
+		DatabasePath: "/var/lib/tempo-agent/agent.db", ControlledUser: "child",
+		TickInterval: time.Second, CheckpointInterval: 5 * time.Second,
+		LoginctlPath: "/usr/bin/loginctl", HeartbeatInterval: 10 * time.Second,
+		HTTPTimeout: 8 * time.Second, DeviceID: "device", DeviceToken: "secret",
+		ServerURL: "http://apicompasso.smresume.com",
+	}
+	if err := configuration.Validate(); err == nil {
+		t.Fatal("remote plain HTTP was accepted")
+	}
+	configuration.ServerURL = "https://apicompasso.smresume.com"
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("remote HTTPS rejected: %v", err)
+	}
+	configuration.ServerURL = "http://127.0.0.1:8081"
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("loopback development HTTP rejected: %v", err)
+	}
+}

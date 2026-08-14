@@ -1,4 +1,4 @@
-# Substitua pelo nome exato da conta comum controlada no Zorin.
+# Substitua pelo nome exato da conta comum controlada nesta máquina.
 controlled_user = "usuario_controlado"
 
 database_path = "/var/lib/tempo-agent/tempo-agent.db"

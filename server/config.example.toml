@@ -7,3 +7,4 @@ session_lifetime = "8h"
 
 # Somente desenvolvimento. Produção deverá usar HTTPS no reverse proxy.
 secure_cookies = false
+admin_origin = "http://127.0.0.1:8182"

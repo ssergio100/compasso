@@ -20,13 +20,17 @@ type Admin struct {
 }
 
 type Device struct {
-	ID                    string
-	Name                  string
-	LastSeenAt            *time.Time
-	PolicyRevision        int64
-	AppliedPolicyRevision int64
-	CreatedAt             time.Time
-	Online                bool
+	ID                     string
+	Name                   string
+	LastSeenAt             *time.Time
+	PolicyRevision         int64
+	AppliedPolicyRevision  int64
+	AppliedControlRevision int64
+	GraphicalSessionActive bool
+	GraphicalSessionLocked bool
+	GraphicalSessionID     string
+	CreatedAt              time.Time
+	Online                 bool
 }
 
 type Policy struct {
@@ -40,6 +44,29 @@ type Policy struct {
 	UpdatedAt             time.Time
 }
 
+type Control struct {
+	Revision         int64
+	MonitoringPaused bool
+	ManualBlock      bool
+}
+
+func (s *Store) loadControl(ctx context.Context, deviceID string) (Control, error) {
+	var control Control
+	var paused, blocked int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT revision, monitoring_paused, manual_block FROM device_control WHERE device_id=?`, deviceID,
+	).Scan(&control.Revision, &paused, &blocked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Control{}, ErrNotFound
+	}
+	control.MonitoringPaused, control.ManualBlock = paused != 0, blocked != 0
+	return control, err
+}
+
+func (s *Store) LoadControl(ctx context.Context, deviceID string) (Control, error) {
+	return s.loadControl(ctx, deviceID)
+}
+
 type Routine struct {
 	ID      string
 	Name    string
@@ -47,6 +74,14 @@ type Routine struct {
 	Start   int64
 	End     int64
 	Enabled bool
+}
+
+type RoutineConflictError struct {
+	RoutineName string
+}
+
+func (e *RoutineConflictError) Error() string {
+	return fmt.Sprintf("routine overlaps %q", e.RoutineName)
 }
 
 type AuditEvent struct {
@@ -67,24 +102,40 @@ func (s *Store) BootstrapAdmin(ctx context.Context, login, passwordHash string, 
 	if login == "" || passwordHash == "" || now.IsZero() {
 		return false, errors.New("bootstrap admin requires login, password hash and time")
 	}
+	id, err := newID()
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin administrator setup: %w", err)
+	}
+	defer tx.Rollback()
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
 		return false, fmt.Errorf("count administrators: %w", err)
 	}
 	if count != 0 {
 		return false, nil
 	}
-	id, err := newID()
-	if err != nil {
-		return false, err
-	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO admin_user(id, login, password_hash, active, created_at, updated_at)
 		VALUES (?, ?, ?, 1, ?, ?)`, id, login, passwordHash, formatTime(now), formatTime(now))
 	if err != nil {
 		return false, fmt.Errorf("bootstrap administrator: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit administrator setup: %w", err)
+	}
 	return true, nil
+}
+
+func (s *Store) HasAdministrators(ctx context.Context) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM admin_user`).Scan(&count); err != nil {
+		return false, fmt.Errorf("count administrators: %w", err)
+	}
+	return count != 0, nil
 }
 
 func (s *Store) AdminByLogin(ctx context.Context, login string) (Admin, error) {
@@ -127,6 +178,10 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 		INSERT INTO policy(device_id, revision, warning_minutes, updated_at) VALUES (?, 1, 10, ?)`, id, stamp); err != nil {
 		return Device{}, fmt.Errorf("create device policy: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO device_control(device_id, revision, updated_at) VALUES (?, 1, ?)`, id, stamp); err != nil {
+		return Device{}, fmt.Errorf("create device control: %w", err)
+	}
 	for weekday := 0; weekday < 7; weekday++ {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO weekly_quota(device_id, weekday, seconds_allowed) VALUES (?, ?, 0)`, id, weekday); err != nil {
@@ -144,7 +199,9 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device ORDER BY name, id`)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
+		       graphical_session_active, graphical_session_locked, graphical_session_id, created_at
+		FROM device ORDER BY name, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
@@ -153,10 +210,18 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	for rows.Next() {
 		var device Device
 		var lastSeen sql.NullString
+		var graphicalSessionID sql.NullString
+		var graphicalSessionActive int
+		var graphicalSessionLocked int
 		var created string
-		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+			&device.AppliedPolicyRevision, &device.AppliedControlRevision, &graphicalSessionActive,
+			&graphicalSessionLocked, &graphicalSessionID, &created); err != nil {
 			return nil, err
 		}
+		device.GraphicalSessionActive = graphicalSessionActive != 0
+		device.GraphicalSessionLocked = graphicalSessionLocked != 0
+		device.GraphicalSessionID = graphicalSessionID.String
 		device.CreatedAt, err = parseTime(created)
 		if err != nil {
 			return nil, err
@@ -176,10 +241,17 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, error) {
 	var device Device
 	var lastSeen sql.NullString
+	var graphicalSessionID sql.NullString
+	var graphicalSessionActive int
+	var graphicalSessionLocked int
 	var created string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, created_at FROM device WHERE id=?`, id,
-	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision, &device.AppliedPolicyRevision, &created)
+		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
+		       graphical_session_active, graphical_session_locked, graphical_session_id, created_at
+		FROM device WHERE id=?`, id,
+	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+		&device.AppliedPolicyRevision, &device.AppliedControlRevision, &graphicalSessionActive,
+		&graphicalSessionLocked, &graphicalSessionID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, Policy{}, ErrNotFound
 	}
@@ -187,6 +259,9 @@ func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, erro
 		return Device{}, Policy{}, err
 	}
 	device.CreatedAt, _ = parseTime(created)
+	device.GraphicalSessionActive = graphicalSessionActive != 0
+	device.GraphicalSessionLocked = graphicalSessionLocked != 0
+	device.GraphicalSessionID = graphicalSessionID.String
 	if lastSeen.Valid {
 		value, parseErr := parseTime(lastSeen.String)
 		if parseErr != nil {
@@ -291,6 +366,15 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 			return "", ErrNotFound
 		}
 	}
+	existing, err := loadRoutines(ctx, tx, deviceID)
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range existing {
+		if candidate.ID != routine.ID && routinesOverlap(routine, candidate) {
+			return "", &RoutineConflictError{RoutineName: candidate.Name}
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO routine(id, device_id, name, start_second, end_second, enabled)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -322,6 +406,82 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 		return "", err
 	}
 	return routine.ID, nil
+}
+
+type queryer interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}
+
+func loadRoutines(ctx context.Context, q queryer, deviceID string) ([]Routine, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT r.id, r.name, r.start_second, r.end_second, r.enabled, rd.weekday
+		FROM routine r LEFT JOIN routine_day rd ON rd.routine_id=r.id
+		WHERE r.device_id=? ORDER BY r.id`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var routines []Routine
+	indexes := make(map[string]int)
+	for rows.Next() {
+		var id, name string
+		var start, end int64
+		var enabled int
+		var weekday sql.NullInt64
+		if err := rows.Scan(&id, &name, &start, &end, &enabled, &weekday); err != nil {
+			return nil, err
+		}
+		index, ok := indexes[id]
+		if !ok {
+			index = len(routines)
+			indexes[id] = index
+			routines = append(routines, Routine{ID: id, Name: name, Start: start, End: end, Enabled: enabled != 0})
+		}
+		if weekday.Valid {
+			routines[index].Days[weekday.Int64] = true
+		}
+	}
+	return routines, rows.Err()
+}
+
+type routineInterval struct{ start, end int64 }
+
+func routineIntervals(routine Routine) []routineInterval {
+	const daySeconds = int64(24 * 60 * 60)
+	intervals := make([]routineInterval, 0, 14)
+	for day := int64(0); day < 7; day++ {
+		previousDay := (day + 6) % 7
+		if routine.Start == routine.End {
+			if routine.Days[day] {
+				intervals = append(intervals, routineInterval{day * daySeconds, (day + 1) * daySeconds})
+			}
+			continue
+		}
+		if routine.Start < routine.End {
+			if routine.Days[day] {
+				intervals = append(intervals, routineInterval{day*daySeconds + routine.Start, day*daySeconds + routine.End})
+			}
+			continue
+		}
+		if routine.Days[previousDay] && routine.End > 0 {
+			intervals = append(intervals, routineInterval{day * daySeconds, day*daySeconds + routine.End})
+		}
+		if routine.Days[day] {
+			intervals = append(intervals, routineInterval{day*daySeconds + routine.Start, (day + 1) * daySeconds})
+		}
+	}
+	return intervals
+}
+
+func routinesOverlap(first, second Routine) bool {
+	for _, a := range routineIntervals(first) {
+		for _, b := range routineIntervals(second) {
+			if a.start < b.end && b.start < a.end {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) DeleteRoutine(ctx context.Context, deviceID, routineID string, now time.Time) error {
@@ -408,6 +568,28 @@ func (s *Store) LoadDailySummary(ctx context.Context, deviceID, localDate string
 		return DailySummary{}, fmt.Errorf("load daily summary: %w", err)
 	}
 	return summary, nil
+}
+
+// LatestHeartbeatLocalDate returns the controlled computer's local date from
+// its most recent heartbeat. An empty result means the device has never sent a
+// usage sample.
+func (s *Store) LatestHeartbeatLocalDate(ctx context.Context, deviceID string) (string, error) {
+	var localDate string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT local_date FROM daily_usage
+		WHERE device_id=? ORDER BY last_sync_at DESC LIMIT 1`, deviceID,
+	).Scan(&localDate)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load latest heartbeat local date: %w", err)
+	}
+	parsedDate, err := time.Parse("2006-01-02", localDate)
+	if err != nil || parsedDate.Format("2006-01-02") != localDate {
+		return "", fmt.Errorf("stored heartbeat local date is invalid: %q", localDate)
+	}
+	return localDate, nil
 }
 
 func (s *Store) InsertAudit(ctx context.Context, deviceID, kind string, payload interface{}, now time.Time) error {

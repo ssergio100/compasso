@@ -14,6 +14,7 @@ import (
 type Config struct {
 	ListenAddress   string
 	DatabasePath    string
+	AdminOrigin     string
 	SecureCookies   bool
 	SessionLifetime time.Duration
 	OnlineTimeout   time.Duration
@@ -52,6 +53,7 @@ func Load(path string) (Config, error) {
 	}
 	configuration := Config{
 		ListenAddress: values["listen_address"], DatabasePath: values["database_path"],
+		AdminOrigin:     values["admin_origin"],
 		SessionLifetime: 8 * time.Hour, OnlineTimeout: 60 * time.Second,
 	}
 	if value := values["secure_cookies"]; value != "" {
@@ -71,6 +73,28 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("parse online_timeout: %w", err)
 		}
+	}
+	if err := configuration.Validate(); err != nil {
+		return Config{}, err
+	}
+	return configuration, nil
+}
+
+// ApplyEnvironmentOverrides applies deployment settings that can vary without
+// rebuilding the server image. An empty value preserves the file setting.
+func ApplyEnvironmentOverrides(configuration Config, environmentValue func(string) string) (Config, error) {
+	if environmentValue == nil {
+		return configuration, errors.New("environment lookup is required")
+	}
+	if adminOrigin := strings.TrimSpace(environmentValue("TEMPO_ADMIN_ORIGIN")); adminOrigin != "" {
+		configuration.AdminOrigin = adminOrigin
+	}
+	if secureCookies := strings.TrimSpace(environmentValue("TEMPO_SECURE_COOKIES")); secureCookies != "" {
+		value, err := strconv.ParseBool(secureCookies)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse TEMPO_SECURE_COOKIES: %w", err)
+		}
+		configuration.SecureCookies = value
 	}
 	if err := configuration.Validate(); err != nil {
 		return Config{}, err

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -22,7 +23,13 @@ var (
 
 // Store owns the agent's local SQLite connection.
 type Store struct {
-	db *sql.DB
+	db                    *sql.DB
+	policyMu              sync.RWMutex
+	cachedPolicy          PolicySnapshot
+	hasCachedPolicy       bool
+	sessionStateMu        sync.RWMutex
+	confirmedSessionState ConfirmedSessionState
+	hasConfirmedState     bool
 }
 
 // Open opens (or creates) an agent database and applies all embedded migrations.
@@ -60,52 +67,20 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return s, nil
-}
-
-// OpenReadOnly opens an existing agent database without applying migrations or
-// changing connection pragmas. It is intended for short-lived access checks in
-// the PAM login path.
-func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	if path == "" {
-		return nil, errors.New("database path cannot be empty")
-	}
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve database path: %w", err)
-	}
-	dsnURL := url.URL{Scheme: "file", Path: absolutePath}
-	query := dsnURL.Query()
-	query.Set("mode", "ro")
-	query.Set("_busy_timeout", "3000")
-	query.Set("_foreign_keys", "on")
-	dsnURL.RawQuery = query.Encode()
-
-	db, err := sql.Open("sqlite3", dsnURL.String())
-	if err != nil {
-		return nil, fmt.Errorf("open read-only sqlite database: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if err := db.PingContext(ctx); err != nil {
+	if err := s.refreshPolicyCache(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("connect read-only sqlite database: %w", err)
+		return nil, err
 	}
-	return &Store{db: db}, nil
+	if err := s.refreshConfirmedSessionStateLocked(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // Close flushes SQLite's connection state and closes the database.
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-// SchemaVersion returns SQLite's current user_version.
-func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
-	var version int
-	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
-		return 0, fmt.Errorf("read schema version: %w", err)
-	}
-	return version, nil
 }
 
 func boolInt(value bool) int {
