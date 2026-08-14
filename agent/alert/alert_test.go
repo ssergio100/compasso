@@ -7,12 +7,18 @@ import (
 	"github.com/ssergio100/compasso/agent/policy"
 )
 
-func TestDueAlertsReturnsCrossedRoutineThresholds(t *testing.T) {
+func TestTrackerReturnsCrossedRoutineThresholds(t *testing.T) {
 	blockAt := time.Date(2026, 8, 8, 22, 0, 0, 0, time.Local)
-	decision := policy.Decision{Allowed: true, NextBlockAt: blockAt, NextBlockReason: policy.ReasonRoutine}
-	alerts, err := DueAlerts(decision, 10,
-		time.Date(2026, 8, 8, 21, 49, 59, 0, time.Local),
-		time.Date(2026, 8, 8, 21, 59, 0, 0, time.Local))
+	decision := policy.Decision{
+		Allowed: true, Remaining: time.Hour,
+		NextBlockAt: blockAt, NextBlockReason: policy.ReasonRoutine,
+	}
+	cycle := Cycle{PolicyRevision: 1, SessionID: "session-3", LocalDate: "2026-08-08"}
+	var tracker Tracker
+	if alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-10*time.Minute-time.Second), true); err != nil || len(alerts) != 0 {
+		t.Fatalf("initial alerts=%+v err=%v", alerts, err)
+	}
+	alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-time.Minute), true)
 	if err != nil || len(alerts) != 3 {
 		t.Fatalf("routine alerts=%+v err=%v", alerts, err)
 	}
@@ -21,42 +27,89 @@ func TestDueAlertsReturnsCrossedRoutineThresholds(t *testing.T) {
 	}
 }
 
-func TestDueAlertsReturnsNoAlertWithoutFutureBlock(t *testing.T) {
-	now := time.Date(2026, 8, 8, 21, 50, 0, 0, time.Local)
-	for _, decision := range []policy.Decision{
-		{Allowed: true, Reason: policy.ReasonPaused},
-		{Allowed: false, Reason: policy.ReasonManualBlock},
-	} {
-		alerts, err := DueAlerts(decision, 10, now.Add(-time.Second), now)
-		if err != nil || len(alerts) != 0 {
-			t.Fatalf("decision=%+v alerts=%+v err=%v", decision, alerts, err)
-		}
+func TestTrackerDoesNotRepeatThresholdWhenPredictionMoves(t *testing.T) {
+	cycle := Cycle{PolicyRevision: 1, SessionID: "session-3", LocalDate: "2026-08-08"}
+	var tracker Tracker
+	firstBlock := time.Date(2026, 8, 8, 14, 2, 0, 0, time.Local)
+	decision := policy.Decision{
+		Allowed: true, Remaining: 61 * time.Second,
+		NextBlockAt: firstBlock, NextBlockReason: policy.ReasonQuota,
+	}
+	if alerts, err := tracker.Due(decision, 1, cycle, firstBlock.Add(-time.Minute-time.Second), true); err != nil || len(alerts) != 0 {
+		t.Fatalf("initial alerts=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = time.Minute
+	alerts, err := tracker.Due(decision, 1, cycle, firstBlock.Add(-time.Minute), true)
+	if err != nil || len(alerts) != 1 || alerts[0].Kind != AlertOneMinute {
+		t.Fatalf("first threshold alerts=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = 59 * time.Second
+	decision.NextBlockAt = firstBlock.Add(time.Second)
+	alerts, err = tracker.Due(decision, 1, cycle, firstBlock.Add(-time.Minute+time.Second), true)
+	if err != nil || len(alerts) != 0 {
+		t.Fatalf("moving prediction repeated threshold: %+v err=%v", alerts, err)
 	}
 }
 
-func TestDueAlertsReturnsOnlyNewlyCrossedThreshold(t *testing.T) {
-	blockAt := time.Date(2026, 8, 8, 14, 2, 0, 0, time.Local)
-	decision := policy.Decision{Allowed: true, NextBlockAt: blockAt, NextBlockReason: policy.ReasonQuota}
-	dueAlerts, err := DueAlerts(decision, 1,
-		time.Date(2026, 8, 8, 14, 0, 59, 0, time.Local),
-		time.Date(2026, 8, 8, 14, 1, 0, 0, time.Local))
-	if err != nil || len(dueAlerts) != 1 || dueAlerts[0].Kind != AlertOneMinute {
-		t.Fatalf("due alerts=%+v err=%v", dueAlerts, err)
+func TestTrackerConsumesLockedAlertsWithoutBacklog(t *testing.T) {
+	blockAt := time.Date(2026, 8, 8, 22, 0, 0, 0, time.Local)
+	decision := policy.Decision{
+		Allowed: true, Remaining: 11 * time.Minute,
+		NextBlockAt: blockAt, NextBlockReason: policy.ReasonQuota,
 	}
-	dueAlerts, err = DueAlerts(decision, 1,
-		time.Date(2026, 8, 8, 14, 1, 0, 0, time.Local),
-		time.Date(2026, 8, 8, 14, 1, 1, 0, time.Local))
-	if err != nil || len(dueAlerts) != 0 {
-		t.Fatalf("threshold was delivered repeatedly: %+v err=%v", dueAlerts, err)
+	cycle := Cycle{PolicyRevision: 1, SessionID: "session-3", LocalDate: "2026-08-08"}
+	var tracker Tracker
+	_, _ = tracker.Due(decision, 10, cycle, blockAt.Add(-10*time.Minute-time.Second), true)
+	decision.Remaining = 10 * time.Minute
+	if alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-10*time.Minute), false); err != nil || len(alerts) != 0 {
+		t.Fatalf("locked alerts=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = 10*time.Minute - time.Second
+	if alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-10*time.Minute+time.Second), true); err != nil || len(alerts) != 0 {
+		t.Fatalf("unlock replayed alert=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = 5 * time.Minute
+	alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-5*time.Minute), true)
+	if err != nil || len(alerts) != 1 || alerts[0].Kind != AlertFiveMinute {
+		t.Fatalf("future alert after unlock=%+v err=%v", alerts, err)
 	}
 }
 
-func TestDueAlertsRejectsInvalidInputs(t *testing.T) {
+func TestTrackerStartsNewCycleAfterBalanceIncrease(t *testing.T) {
+	cycle := Cycle{PolicyRevision: 1, SessionID: "session-3", LocalDate: "2026-08-08"}
+	var tracker Tracker
+	start := time.Date(2026, 8, 8, 14, 0, 0, 0, time.Local)
+	decision := policy.Decision{
+		Allowed: true, Remaining: 61 * time.Second,
+		NextBlockAt: start.Add(61 * time.Second), NextBlockReason: policy.ReasonQuota,
+	}
+	_, _ = tracker.Due(decision, 1, cycle, start, true)
+	decision.Remaining = time.Minute
+	decision.NextBlockAt = start.Add(61 * time.Second)
+	alerts, _ := tracker.Due(decision, 1, cycle, start.Add(time.Second), true)
+	if len(alerts) != 1 {
+		t.Fatalf("first cycle alerts=%+v", alerts)
+	}
+	decision.Remaining = 2 * time.Minute
+	decision.NextBlockAt = start.Add(2*time.Minute + 2*time.Second)
+	alerts, _ = tracker.Due(decision, 1, cycle, start.Add(2*time.Second), true)
+	if len(alerts) != 0 {
+		t.Fatalf("balance increase emitted immediate alert=%+v", alerts)
+	}
+	decision.Remaining = time.Minute
+	alerts, _ = tracker.Due(decision, 1, cycle, start.Add(62*time.Second), true)
+	if len(alerts) != 1 || alerts[0].Kind != AlertOneMinute {
+		t.Fatalf("new balance cycle alerts=%+v", alerts)
+	}
+}
+
+func TestTrackerRejectsInvalidInputs(t *testing.T) {
 	decision := policy.Decision{Allowed: true, NextBlockAt: time.Now().Add(time.Hour)}
-	if _, err := DueAlerts(decision, -1, time.Now(), time.Now()); err == nil {
+	var tracker Tracker
+	if _, err := tracker.Due(decision, -1, Cycle{}, time.Now(), true); err == nil {
 		t.Fatal("negative warning unexpectedly accepted")
 	}
-	if _, err := DueAlerts(decision, 10, time.Now(), time.Time{}); err == nil {
+	if _, err := tracker.Due(decision, 10, Cycle{}, time.Time{}, true); err == nil {
 		t.Fatal("zero current time unexpectedly accepted")
 	}
 }
