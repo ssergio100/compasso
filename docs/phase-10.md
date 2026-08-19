@@ -1,5 +1,9 @@
 # Fase 10 — teste ponta a ponta e piloto
 
+> **Registro histórico:** os ensaios abaixo descrevem versões que encerravam a
+> sessão. O agente atual usa `loginctl lock-session`, conforme `agent/README.md`;
+> as referências a logout permanecem somente como histórico dos pilotos.
+
 ## Implementação
 
 - alertas de cota e rotina são enviados à sessão gráfica do usuário controlado;
@@ -79,10 +83,8 @@ Depois que o aviso aparecer, pause novamente a vigilância no painel.
   tela preta (teste real).
 - [ ] Encerrar a rotina **Dormir**, entrar novamente e confirmar que o saldo
   extra permaneceu disponível.
-- [x] Registrar que tempo extra remanescente ou não utilizado deverá ser zerado
-  por uma regra de expiração ainda não definida.
-- [ ] Discutir e definir a circunstância exata da expiração antes de alterar o
-  comportamento atual.
+- [x] Tempo extra é crédito do dia local ativo no momento da entrega ao agente;
+  o saldo remanescente, incluindo bônus, zera na virada do dia.
 
 ### 3. Validar o novo logout seguro
 

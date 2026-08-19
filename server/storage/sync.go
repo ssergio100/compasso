@@ -173,6 +173,9 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 			last_sync_at=excluded.last_sync_at`, deviceID, request.LocalDate, request.SecondsUsed, stamp); err != nil {
 		return protocol.HeartbeatResponse{}, fmt.Errorf("store heartbeat usage: %w", err)
 	}
+	if err := applyPendingRemoteBonuses(ctx, tx, deviceID, request.LocalDate); err != nil {
+		return protocol.HeartbeatResponse{}, err
+	}
 
 	acknowledged := make([]string, 0, len(request.Events))
 	for _, event := range request.Events {
@@ -260,6 +263,83 @@ func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protoc
 		return fmt.Errorf("audit local bonus event: %w", err)
 	}
 	return nil
+}
+
+// applyPendingRemoteBonuses turns queued credit increments into today's
+// balance only when the controlled computer reports its current daily state.
+// This keeps the command independent from the server's calendar and lets the
+// normal daily rollover discard yesterday's remaining credit.
+func applyPendingRemoteBonuses(ctx context.Context, tx *sql.Tx, deviceID, localDate string) error {
+	queued, err := loadPendingRemoteCredits(ctx, tx, deviceID)
+	if err != nil {
+		return err
+	}
+	for _, credit := range queued {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO bonus(uuid, device_id, local_date, seconds, origin, created_at)
+			VALUES (?, ?, ?, ?, 'web', ?)`, credit.id, deviceID, localDate, credit.seconds, formatTime(credit.createdAt)); err != nil {
+			return fmt.Errorf("apply pending remote bonus: %w", err)
+		}
+	}
+	return nil
+}
+
+func decodeCreditIncrementCommand(commandID string, payloadJSON []byte, fallbackCreatedAt time.Time) (protocol.CreditIncrementPayload, error) {
+	var bonus protocol.CreditIncrementPayload
+	if err := json.Unmarshal(payloadJSON, &bonus); err != nil || bonus.Seconds <= 0 ||
+		bonus.Seconds > int64((24*time.Hour)/time.Second) || bonus.Origin != "web" {
+		return protocol.CreditIncrementPayload{}, errors.New("invalid credit increment command")
+	}
+	if bonus.UUID == "" {
+		bonus.UUID = commandID
+	}
+	if bonus.UUID != commandID {
+		return protocol.CreditIncrementPayload{}, errors.New("credit increment command identifier mismatch")
+	}
+	if bonus.CreatedAt.IsZero() {
+		bonus.CreatedAt = fallbackCreatedAt
+	}
+	return bonus, nil
+}
+
+type queryContext interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}
+
+type pendingRemoteCredit struct {
+	id        string
+	seconds   int64
+	createdAt time.Time
+}
+
+func loadPendingRemoteCredits(ctx context.Context, queryer queryContext, deviceID string) ([]pendingRemoteCredit, error) {
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT c.id, c.payload_json, c.created_at
+		FROM device_command c
+		LEFT JOIN bonus b ON b.uuid=c.id
+		WHERE c.device_id=? AND c.kind='add_bonus' AND c.acknowledged_at IS NULL AND b.uuid IS NULL
+		ORDER BY c.created_at, c.id`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("load pending credit increments: %w", err)
+	}
+	defer rows.Close()
+	var queued []pendingRemoteCredit
+	for rows.Next() {
+		var id, payloadJSON, created string
+		if err := rows.Scan(&id, &payloadJSON, &created); err != nil {
+			return nil, err
+		}
+		createdAt, err := parseTime(created)
+		if err != nil {
+			return nil, err
+		}
+		credit, err := decodeCreditIncrementCommand(id, []byte(payloadJSON), createdAt)
+		if err != nil {
+			return nil, err
+		}
+		queued = append(queued, pendingRemoteCredit{id: id, seconds: credit.Seconds, createdAt: credit.CreatedAt})
+	}
+	return queued, rows.Err()
 }
 
 func validOpaqueIdentifier(identifier string) bool {
@@ -358,38 +438,75 @@ func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now tim
 	return tx.Commit()
 }
 
-func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID, localDate string, seconds int64, now time.Time) error {
-	parsed, err := time.Parse("2006-01-02", localDate)
-	if err != nil || parsed.Format("2006-01-02") != localDate || seconds <= 0 || seconds > int64((24*time.Hour)/time.Second) {
-		return errors.New("invalid remote bonus")
+func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID string, seconds int64, now time.Time) (string, error) {
+	if seconds <= 0 || seconds > int64((24*time.Hour)/time.Second) || now.IsZero() {
+		return "", errors.New("invalid remote bonus")
 	}
 	uuid, err := newID()
 	if err != nil {
-		return err
+		return "", err
 	}
-	payload, err := json.Marshal(protocol.BonusPayload{UUID: uuid, LocalDate: localDate, Seconds: seconds, Origin: "web", CreatedAt: now.UTC()})
+	payload, err := json.Marshal(protocol.CreditIncrementPayload{UUID: uuid, Seconds: seconds, Origin: "web", CreatedAt: now.UTC()})
 	if err != nil {
-		return err
+		return "", err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 	stamp := formatTime(now)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bonus(uuid, device_id, local_date, seconds, origin, created_at) VALUES (?, ?, ?, ?, 'web', ?)`, uuid, deviceID, localDate, seconds, stamp); err != nil {
-		return err
-	}
 	if _, err := bumpPolicyKeepWarning(ctx, tx, deviceID, now); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, 'add_bonus', ?, ?)`, uuid, deviceID, string(payload), stamp); err != nil {
-		return err
+		return "", err
 	}
-	if err := insertAudit(ctx, tx, deviceID, "bonus_added", map[string]interface{}{"origin": "web", "seconds": seconds, "local_date": localDate}, now); err != nil {
-		return err
+	if err := insertAudit(ctx, tx, deviceID, "bonus_queued", map[string]interface{}{"origin": "web", "seconds": seconds}, now); err != nil {
+		return "", err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return uuid, nil
+}
+
+func (s *Store) RemoteBonusAcknowledged(ctx context.Context, deviceID, operationID string) (bool, error) {
+	if !validOpaqueIdentifier(deviceID) || !validOpaqueIdentifier(operationID) {
+		return false, ErrNotFound
+	}
+	var acknowledgedAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT acknowledged_at FROM device_command
+		WHERE id=? AND device_id=? AND kind='add_bonus'`, operationID, deviceID).Scan(&acknowledgedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return acknowledgedAt.Valid, nil
+}
+
+func (s *Store) HasPendingRemoteBonus(ctx context.Context, deviceID string) (bool, error) {
+	var pending int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM device_command
+			WHERE device_id=? AND kind='add_bonus' AND acknowledged_at IS NULL
+		)`, deviceID).Scan(&pending)
+	return pending != 0, err
+}
+
+func (s *Store) UnacknowledgedRemoteBonusSeconds(ctx context.Context, deviceID, localDate string) (int64, error) {
+	var seconds int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(b.seconds), 0)
+		FROM bonus b
+		JOIN device_command c ON c.id=b.uuid AND c.device_id=b.device_id
+		WHERE b.device_id=? AND b.local_date=? AND c.kind='add_bonus' AND c.acknowledged_at IS NULL`,
+		deviceID, localDate).Scan(&seconds)
+	return seconds, err
 }
 
 func (s *Store) confirmedSessionState(

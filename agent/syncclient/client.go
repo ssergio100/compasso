@@ -36,6 +36,7 @@ type Client struct {
 	graphicalSessionLocked bool
 	controlMu              sync.RWMutex
 	controlOnline          bool
+	controlChecked         bool
 	controlPaused          bool
 	controlBlocked         bool
 	controlRevision        int64
@@ -48,8 +49,17 @@ func (c *Client) RemoteControl() (online, paused, blocked bool) {
 	return c.controlOnline, c.controlPaused, c.controlBlocked
 }
 
+// SynchronizationStatus reports whether a heartbeat attempt completed and
+// whether the latest attempt succeeded.
+func (c *Client) SynchronizationStatus() (checked, online bool) {
+	c.controlMu.RLock()
+	defer c.controlMu.RUnlock()
+	return c.controlChecked, c.controlOnline
+}
+
 func (c *Client) setRemoteControl(online, paused, blocked bool, revision int64) {
 	c.controlMu.Lock()
+	c.controlChecked = true
 	c.controlOnline, c.controlPaused, c.controlBlocked = online, paused, blocked
 	c.controlRevision = revision
 	c.controlMu.Unlock()
@@ -169,6 +179,7 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+c.config.DeviceToken)
 	httpRequest.Header.Set("X-Tempo-Device-ID", c.config.DeviceID)
+	httpRequest.Header.Set(protocol.VersionHeader, protocol.CurrentProtocolVersion)
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
 		c.recordRetries(ctx, pending)
@@ -194,11 +205,6 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 	if result.Policy != nil {
 		if err := c.store.ReplacePolicy(ctx, fromProtocolPolicy(*result.Policy)); err != nil {
 			return protocol.HeartbeatResponse{}, fmt.Errorf("apply policy revision %d: %w", result.Policy.Revision, err)
-		}
-	}
-	for _, command := range result.Commands {
-		if err := c.applyCommand(ctx, command, now); err != nil {
-			return protocol.HeartbeatResponse{}, fmt.Errorf("apply command %s: %w", command.ID, err)
 		}
 	}
 	if request.RequestSessionState && result.SessionState == nil {
@@ -228,6 +234,14 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 			return protocol.HeartbeatResponse{}, fmt.Errorf("store confirmed session state: %w", err)
 		}
 	}
+	// A command acknowledgement is evidence that every authoritative state in
+	// the same response was durably installed. In particular, a bonus command
+	// must not be acknowledged while an older balance anchor is still active.
+	for _, command := range result.Commands {
+		if err := c.applyCommand(ctx, command, request.LocalDate, now); err != nil {
+			return protocol.HeartbeatResponse{}, fmt.Errorf("apply command %s: %w", command.ID, err)
+		}
+	}
 	return result, nil
 }
 
@@ -242,6 +256,9 @@ func decodeHeartbeatError(status int, responseBody io.Reader) error {
 	}
 	if status == http.StatusConflict {
 		return errors.New("heartbeat rejected because local synchronization state is newer than the device on the server; local state may belong to another enrollment or the server may have been restored from an older backup")
+	}
+	if status == http.StatusUpgradeRequired {
+		return errors.New("heartbeat rejected because the agent protocol is too old for a pending operation; update the Compasso agent")
 	}
 	return fmt.Errorf("heartbeat returned HTTP %d", status)
 }
@@ -266,7 +283,7 @@ func redactSensitiveText(message, secret string) string {
 	return strings.ReplaceAll(message, secret, "[REDACTED]")
 }
 
-func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now time.Time) error {
+func (c *Client) applyCommand(ctx context.Context, command protocol.Command, localDate string, now time.Time) error {
 	if command.ID == "" || command.CreatedAt.IsZero() {
 		return errors.New("invalid command envelope")
 	}
@@ -276,8 +293,11 @@ func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now
 		// the command makes delivery idempotent and acknowledges it next cycle.
 		return c.store.RecordCommandApplied(ctx, command.ID, now)
 	case "add_bonus":
-		var payload protocol.BonusPayload
+		var payload protocol.CreditIncrementPayload
 		if err := json.Unmarshal(command.Payload, &payload); err != nil {
+			return errors.New("invalid bonus command payload")
+		}
+		if payload.Origin != "web" || payload.Seconds <= 0 {
 			return errors.New("invalid bonus command payload")
 		}
 		if payload.UUID == "" {
@@ -287,7 +307,7 @@ func (c *Client) applyCommand(ctx context.Context, command protocol.Command, now
 			payload.CreatedAt = command.CreatedAt
 		}
 		return c.store.ApplyRemoteBonus(ctx, command.ID, storage.Bonus{
-			UUID: payload.UUID, LocalDate: payload.LocalDate, Seconds: payload.Seconds,
+			UUID: payload.UUID, LocalDate: localDate, Seconds: payload.Seconds,
 			Origin: "web", CreatedAt: payload.CreatedAt,
 		}, now)
 	default:

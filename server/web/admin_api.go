@@ -28,6 +28,19 @@ type adminLoginRequest struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
+type adminBonusResponse struct {
+	Message     string `json:"message"`
+	OperationID string `json:"operation_id"`
+}
+
+type adminBonusStatusResponse struct {
+	Acknowledged bool `json:"acknowledged"`
+}
+
+type updateCommunicationRetentionRequest struct {
+	RetentionDays int `json:"retention_days"`
+}
+
 type adminSetupRequest struct {
 	Login                string `json:"login"`
 	Password             string `json:"password"`
@@ -337,7 +350,7 @@ func (a *App) adminDeviceAPI(w http.ResponseWriter, r *http.Request) {
 		a.adminDeviceRootAPI(w, r, current, deviceID)
 		return
 	}
-	if len(pathParts) > 2 && pathParts[1] != "routines" {
+	if len(pathParts) > 2 && pathParts[1] != "routines" && pathParts[1] != "commands" && pathParts[1] != "communication" {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -355,9 +368,17 @@ func (a *App) adminDeviceAPI(w http.ResponseWriter, r *http.Request) {
 	case "bonus":
 		a.adminDeviceBonusAPI(w, r, current, deviceID)
 	case "commands":
-		a.adminDeviceCommandAPI(w, r, current, deviceID)
+		if len(pathParts) == 3 {
+			a.adminDeviceBonusStatusAPI(w, r, deviceID, pathParts[2])
+		} else if len(pathParts) == 2 {
+			a.adminDeviceCommandAPI(w, r, current, deviceID)
+		} else {
+			writeJSONError(w, http.StatusNotFound, "not found")
+		}
 	case "events":
 		a.adminDeviceEventsAPI(w, r, deviceID)
+	case "communication":
+		a.adminDeviceCommunicationAPI(w, r, current, deviceID, pathParts[2:])
 	default:
 		writeJSONError(w, http.StatusNotFound, "not found")
 	}
@@ -565,13 +586,29 @@ func (a *App) adminDeviceBonusAPI(w http.ResponseWriter, r *http.Request, curren
 		writeJSONError(w, http.StatusBadRequest, "bonus must be between 1 minute and 12 hours")
 		return
 	}
-	if err := a.store.QueueRemoteBonus(
-		r.Context(), deviceID, a.now().Format("2006-01-02"), int64(request.Minutes*60), a.now(),
-	); err != nil {
+	operationID, err := a.store.QueueRemoteBonus(
+		r.Context(), deviceID, int64(request.Minutes*60), a.now(),
+	)
+	if err != nil {
 		writeAdminMutationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"message": "bonus queued"})
+	writeJSON(w, http.StatusAccepted, adminBonusResponse{
+		Message: "bonus queued", OperationID: operationID,
+	})
+}
+
+func (a *App) adminDeviceBonusStatusAPI(w http.ResponseWriter, r *http.Request, deviceID, operationID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	acknowledged, err := a.store.RemoteBonusAcknowledged(r.Context(), deviceID, operationID)
+	if !writeAdminReadError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, adminBonusStatusResponse{Acknowledged: acknowledged})
 }
 
 func (a *App) adminDeviceCommandAPI(w http.ResponseWriter, r *http.Request, current session, deviceID string) {

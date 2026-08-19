@@ -7,6 +7,8 @@
 - política completa por revisão, aplicada transacionalmente no agente;
 - consumo absoluto monotônico e eventos locais idempotentes;
 - comandos com entrega repetida até confirmação durável;
+- capacidade do contrato informada pelo cabeçalho
+  `X-Compasso-Protocol-Version: 2`, compatível com servidores antigos;
 - retry com backoff sem interromper o motor local;
 - estado online/offline, última conexão e revisão aplicada no painel;
 - ações remotas de bônus, pausa, retomada e bloqueio.
@@ -28,8 +30,15 @@ Executados por `make test`:
 - redução remota da cota produz decisão imediata de bloqueio;
 - credencial incorreta recebe HTTP 401;
 - comando é reenviado até ser confirmado e depois sai da fila.
+- bônus remoto só é confirmado depois que a nova âncora foi persistida; agente
+  antigo recebe HTTP 426 antes de consumir o comando incompatível;
 - heartbeat comum não substitui a âncora nem devolve segundos ao contador;
 - bônus remoto cria nova âncora e bônus local concorrente não é perdido;
+- com um minuto restante, bônus remoto de 30 minutos produz âncora de 31
+  minutos e não pode ser apresentado antes do reconhecimento do agente;
+- perto da meia-noite, a data UTC do servidor não participa do crédito: a data
+  local enviada no heartbeat decide o dia ativo e o saldo remanescente zera na
+  virada local;
 - agente online sem sessão gráfica mantém o contador do painel parado;
 - daemon expira uma âncora de três segundos mesmo com cota local de oito horas.
 

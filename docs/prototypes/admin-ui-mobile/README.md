@@ -81,6 +81,10 @@ As ações direcionadas ao computador apresentam três estados: aguardando
 sincronização, aplicado e erro recuperável. Quando o agente está offline, a
 alteração permanece pendente no Compasso até a próxima conexão.
 
+Tempo adicional não usa atualização otimista: a interface conserva o saldo
+anterior, acompanha o identificador retornado pela API e recarrega o valor
+autoritativo somente depois do reconhecimento do agente.
+
 ## Semântica das rotinas
 
 - O dia selecionado é sempre o dia em que a rotina começa.

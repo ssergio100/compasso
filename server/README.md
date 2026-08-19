@@ -40,3 +40,14 @@ confirma o saldo ao autorizar uma sessão gráfica e só envia outra âncora qua
 uma revisão relevante mudar. Presença do agente e presença de sessão gráfica
 são estados separados; o painel só anima o contador quando há sessão ativa. O
 painel também mostra conexão e revisão aplicada pelo agente.
+
+Bônus remoto é uma operação confirmada em duas etapas: a API grava e devolve um
+identificador; o status só inclui o crédito depois que o agente reconhece esse
+identificador. Agentes sem `X-Compasso-Protocol-Version: 2` não recebem o novo
+formato do comando e obtêm HTTP 426 enquanto houver um bônus incompatível
+pendente.
+
+Os metadados de comunicação ficam em uma tabela própria. Corpos HTTP,
+credenciais, cookies, senhas e tokens não são armazenados. A retenção padrão é
+de 30 dias; a limpeza ocorre automaticamente durante a entrada de novos
+registros e também imediatamente quando o administrador reduz o período.

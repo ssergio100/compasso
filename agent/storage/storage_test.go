@@ -75,6 +75,29 @@ func TestPolicyReplacementSurvivesRestartAndRejectsStaleRevision(t *testing.T) {
 	}
 }
 
+func TestPolicyReplacementRemovesAllRoutines(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "agent.db"))
+	defer store.Close()
+	withRoutine := samplePolicy(1)
+	withRoutine.Routines = []StoredRoutine{{
+		ID: "old-routine", Name: "Old", Days: selectedDays(time.Thursday),
+		Start: 22 * time.Hour, End: 23 * time.Hour, Enabled: true,
+	}}
+	if err := store.ReplacePolicy(ctx, withRoutine); err != nil {
+		t.Fatal(err)
+	}
+	withoutRoutines := samplePolicy(2)
+	withoutRoutines.Routines = nil
+	if err := store.ReplacePolicy(ctx, withoutRoutines); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadPolicy(ctx)
+	if err != nil || len(loaded.Routines) != 0 {
+		t.Fatalf("removed routine survived policy replacement: routines=%+v err=%v", loaded.Routines, err)
+	}
+}
+
 func TestFailedPolicyReplacementRollsBackCompletely(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "agent.db"))

@@ -242,18 +242,29 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	if issuedToken["device_token"] == "" {
 		t.Fatal("issued device token is empty")
 	}
-
 	bonusResponse := fixture.requestJSON(
 		http.MethodPost, devicePath+"/bonus", addAdminBonusRequest{Minutes: 10}, true,
 	)
 	if bonusResponse.Code != http.StatusAccepted {
 		t.Fatalf("queue bonus status=%d body=%s", bonusResponse.Code, bonusResponse.Body.String())
 	}
+	var queuedBonus adminBonusResponse
+	decodeResponse(t, bonusResponse, &queuedBonus)
 	commandResponse := fixture.requestJSON(http.MethodPost, devicePath+"/commands", queueAdminCommandRequest{
 		Command: "pause_monitoring",
 	}, true)
 	if commandResponse.Code != http.StatusAccepted {
 		t.Fatalf("queue command status=%d body=%s", commandResponse.Code, commandResponse.Body.String())
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(context.Background(), createdDevice.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 0, LocalDate: fixture.now.Format("2006-01-02"),
+	}, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(context.Background(), createdDevice.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 0, LocalDate: fixture.now.Format("2006-01-02"), CommandAcks: []string{queuedBonus.OperationID},
+	}, fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
 	}
 
 	detailResponse := fixture.requestJSON(http.MethodGet, devicePath, nil, false)
@@ -301,6 +312,123 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	deleteDeviceResponse := fixture.requestJSON(http.MethodDelete, devicePath, nil, true)
 	if deleteDeviceResponse.Code != http.StatusNoContent {
 		t.Fatalf("delete device status=%d", deleteDeviceResponse.Code)
+	}
+}
+
+func TestWebBonusAddsCreditToDayActiveAtDelivery(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+
+	serverNow := time.Date(2026, time.August, 14, 1, 5, 0, 0, time.UTC)
+	fixture.app.now = func() time.Time { return serverNow }
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Brazil timezone", serverNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.requestJSON(http.MethodPost, "/api/v1/admin/devices/"+device.ID+"/bonus",
+		addAdminBonusRequest{Minutes: 30}, true)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("bonus status=%d body=%s", response.Code, response.Body.String())
+	}
+	var queued adminBonusResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &queued); err != nil || queued.OperationID == "" {
+		t.Fatalf("bonus confirmation=%+v err=%v", queued, err)
+	}
+	operationPath := "/api/v1/admin/devices/" + device.ID + "/commands/" + queued.OperationID
+	pendingOperation := fixture.requestJSON(http.MethodGet, operationPath, nil, false)
+	if pendingOperation.Code != http.StatusOK || !strings.Contains(pendingOperation.Body.String(), `"acknowledged":false`) {
+		t.Fatalf("pending operation status=%d body=%s", pendingOperation.Code, pendingOperation.Body.String())
+	}
+	beforeDelivery, err := fixture.store.LoadDailySummary(context.Background(), device.ID, "2026-08-14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeDelivery.BonusSeconds != 0 {
+		t.Fatalf("queued bonus was attached to the server date: %+v", beforeDelivery)
+	}
+	_, _, pendingStatus, err := fixture.app.loadDeviceLiveStatus(context.Background(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pendingStatus.BonusSeconds != 0 || pendingStatus.RemainingSeconds != 0 {
+		t.Fatalf("queued credit was presented as already applied: %+v", pendingStatus)
+	}
+	heartbeat, err := fixture.store.ReceiveHeartbeat(context.Background(), device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, LocalDate: "2026-08-13",
+	}, serverNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(heartbeat.Commands) != 1 || heartbeat.Commands[0].Kind != "add_bonus" {
+		t.Fatalf("bonus command not delivered: %+v", heartbeat.Commands)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(heartbeat.Commands[0].Payload, &payload); err != nil || payload["local_date"] != nil {
+		t.Fatalf("credit increment command carried a date: payload=%+v err=%v", payload, err)
+	}
+	localDay, err := fixture.store.LoadDailySummary(context.Background(), device.ID, "2026-08-13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utcDay, err := fixture.store.LoadDailySummary(context.Background(), device.ID, "2026-08-14")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localDay.BonusSeconds != 30*60 || utcDay.BonusSeconds != 0 {
+		t.Fatalf("bonus not applied to current daily credit: local=%+v UTC=%+v", localDay, utcDay)
+	}
+	_, _, deliveredStatus, err := fixture.app.loadDeviceLiveStatus(context.Background(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deliveredStatus.BonusSeconds != 0 || deliveredStatus.RemainingSeconds != 0 {
+		t.Fatalf("unacknowledged credit was presented as available: %+v", deliveredStatus)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(context.Background(), device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision + 1, LocalDate: "2026-08-13", CommandAcks: []string{queued.OperationID},
+	}, serverNow.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	acknowledgedOperation := fixture.requestJSON(http.MethodGet, operationPath, nil, false)
+	if acknowledgedOperation.Code != http.StatusOK || !strings.Contains(acknowledgedOperation.Body.String(), `"acknowledged":true`) {
+		t.Fatalf("acknowledged operation status=%d body=%s", acknowledgedOperation.Code, acknowledgedOperation.Body.String())
+	}
+	_, _, synchronizedStatus, err := fixture.app.loadDeviceLiveStatus(context.Background(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if synchronizedStatus.BonusSeconds != 30*60 || synchronizedStatus.RemainingSeconds != 30*60 {
+		t.Fatalf("acknowledged credit not presented as available: %+v", synchronizedStatus)
+	}
+}
+
+func TestLegacyAgentCannotConsumeNewBonusCommand(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	device, err := fixture.store.CreateDevice(context.Background(), "Legacy agent", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := fixture.store.IssueDeviceToken(context.Background(), device.ID, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.QueueRemoteBonus(context.Background(), device.ID, 30*60, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(protocol.HeartbeatRequest{PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-13"})
+	request := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath, bytes.NewReader(payload))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Tempo-Device-ID", device.ID)
+	response := httptest.NewRecorder()
+	fixture.app.ServeHTTP(response, request)
+	if response.Code != http.StatusUpgradeRequired || !strings.Contains(response.Body.String(), "agent_upgrade_required") {
+		t.Fatalf("legacy heartbeat status=%d body=%s", response.Code, response.Body.String())
+	}
+	summary, err := fixture.store.LoadDailySummary(context.Background(), device.ID, "2026-08-13")
+	if err != nil || summary.BonusSeconds != 0 {
+		t.Fatalf("legacy agent materialized bonus: summary=%+v err=%v", summary, err)
 	}
 }
 
@@ -433,6 +561,56 @@ func TestHeartbeatRequiresDeviceCredential(t *testing.T) {
 	fixture.app.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("valid token status=%d body=%s", response.Code, response.Body.String())
+	}
+	logs, err := fixture.store.ListCommunicationLogs(context.Background(), device.ID, 0, 10)
+	if err != nil || len(logs) != 3 || logs[0].Source != "api" || logs[0].Target != "agent" ||
+		logs[1].Source != "agent" || logs[1].Result != "success" || logs[2].Result != "warning" {
+		t.Fatalf("heartbeat communication logs=%+v err=%v", logs, err)
+	}
+	for _, event := range logs {
+		encoded, _ := json.Marshal(event)
+		if strings.Contains(string(encoded), token) || strings.Contains(string(encoded), "wrong") {
+			t.Fatalf("communication log exposed credential: %s", encoded)
+		}
+	}
+}
+
+func TestAdministrativeCommunicationLogsCanBeConfiguredAndDeleted(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devicePath := "/api/v1/admin/devices/" + device.ID
+	if response := fixture.requestJSON(http.MethodGet, devicePath, nil, false); response.Code != http.StatusOK {
+		t.Fatalf("device detail status=%d body=%s", response.Code, response.Body.String())
+	}
+	response := fixture.requestJSON(http.MethodGet, devicePath+"/communication", nil, false)
+	if response.Code != http.StatusOK {
+		t.Fatalf("communication status=%d body=%s", response.Code, response.Body.String())
+	}
+	var listing struct {
+		Events        []serverstorage.CommunicationLog `json:"events"`
+		RetentionDays int                              `json:"retention_days"`
+	}
+	decodeResponse(t, response, &listing)
+	if len(listing.Events) != 1 || listing.Events[0].Source != "interface" || listing.RetentionDays != 30 {
+		t.Fatalf("communication listing=%+v", listing)
+	}
+	response = fixture.requestJSON(http.MethodPut, devicePath+"/communication/settings", updateCommunicationRetentionRequest{RetentionDays: 7}, true)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retention status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = fixture.requestJSON(http.MethodDelete, devicePath+"/communication", nil, true)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete logs status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = fixture.requestJSON(http.MethodGet, devicePath+"/communication", nil, false)
+	decodeResponse(t, response, &listing)
+	if len(listing.Events) != 0 || listing.RetentionDays != 7 {
+		t.Fatalf("communication after delete=%+v", listing)
 	}
 }
 

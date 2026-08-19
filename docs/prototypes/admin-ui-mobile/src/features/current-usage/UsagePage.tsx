@@ -37,7 +37,7 @@ export function UsagePage() {
     && !control.paused
     && !control.blocked;
   const effectiveLimit = client.dailyLimitMinutes + control.bonusMinutes;
-  const remainingMinutes = Math.max(0, effectiveLimit - client.usedMinutes);
+  const remainingMinutes = client.remainingMinutes;
   const usagePercent = effectiveLimit > 0
     ? Math.min(100, Math.round((client.usedMinutes / effectiveLimit) * 100))
     : 0;
@@ -113,7 +113,7 @@ export function UsagePage() {
           </dl></Surface>
         </div>
       </div>
-      <BonusTimeDialog clientName={client.name} onClose={() => setBonusTimeOpen(false)} onConfirm={async (minutes) => { const changed = await addBonusTime(client.id, minutes); showToast(changed ? `${formatMinutes(minutes)} adicionados.` : "Não foi possível adicionar o tempo."); }} open={bonusTimeOpen} />
+      <BonusTimeDialog clientName={client.name} onClose={() => setBonusTimeOpen(false)} onConfirm={async (minutes) => { const changed = await addBonusTime(client.id, minutes); showToast(changed ? "Tempo registrado. Sincronizando com o computador…" : "Não foi possível adicionar o tempo."); }} open={bonusTimeOpen} />
     </Page>
   );
 }

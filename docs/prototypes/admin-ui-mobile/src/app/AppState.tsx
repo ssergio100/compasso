@@ -111,6 +111,8 @@ function interfaceID() {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const { authenticated } = useAuthState();
   const operationTimers = useRef<number[]>([]);
@@ -151,7 +153,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const client = nextClients.find((item) => item.id === clientId);
         const confirmed = client && (operation.confirmation === "policy"
           ? client.appliedPolicyRevision >= client.policyRevision
-          : operation.confirmation === "pause" ? client.controlStatus === "paused"
+            : operation.confirmation === "bonus" ? false
+              : operation.confirmation === "pause" ? client.controlStatus === "paused"
             : operation.confirmation === "block" ? client.controlStatus === "blocked"
               : operation.confirmation === "resume" || operation.confirmation === "unblock"
                 ? client.controlStatus === "active"
@@ -215,9 +218,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           : "Salvo no Compasso. Será aplicado quando o agente se conectar.",
       },
     }));
-    if (!online) return true;
+    if (!online) return id;
 
-    if (remoteMode) return true;
+    if (remoteMode) return id;
     const timer = window.setTimeout(() => {
       setOperations((current) => current[clientId]?.id === id ? {
         ...current,
@@ -380,16 +383,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const addBonusTime = useCallback(async (clientId: string, minutes: number) => {
-    const accepted = startClientOperation(clientId, "Adicionar tempo", "Tempo adicional confirmado pelo agente.");
+    const accepted = startClientOperation(clientId, "Adicionar tempo", "Tempo adicional confirmado pelo agente.", "bonus");
     if (!accepted) return false;
     try {
-      if (remoteMode) await compassoAPI.addBonus(clientId, minutes);
-      updateClientControl(clientId, (current) => ({
-        ...current,
-        bonusMinutes: current.bonusMinutes + minutes,
-      }));
-      if (remoteMode) await reloadData();
-      else recordAuditEvent(clientId, "Tempo adicional", `${minutes} minutos adicionados ao limite de hoje.`);
+      if (remoteMode) {
+        const confirmation = await compassoAPI.addBonus(clientId, minutes);
+        void (async () => {
+          const deadline = Date.now() + 2 * 60 * 1000;
+          while (Date.now() < deadline) {
+            const status = await compassoAPI.loadBonusStatus(clientId, confirmation.operation_id);
+            if (status.acknowledged) {
+              await reloadData();
+              setOperations((current) => current[clientId]?.id === accepted ? {
+                ...current,
+                [clientId]: { ...current[clientId], status: "applied", detail: "Tempo adicional confirmado pelo agente." },
+              } : current);
+              return;
+            }
+            await wait(2000);
+          }
+        })().catch((error) => failClientOperation(clientId, error));
+        return true;
+      }
+      updateClientControl(clientId, (current) => ({ ...current, bonusMinutes: current.bonusMinutes + minutes }));
+      recordAuditEvent(clientId, "Tempo adicional", `${minutes} minutos adicionados ao limite de hoje.`);
       return true;
     } catch (error) {
       failClientOperation(clientId, error);

@@ -168,7 +168,8 @@ export class CompassoAPIClient {
   updatePassword(deviceId: string, password: string, confirmation: string) { return this.request(`/api/v1/admin/devices/${deviceId}/password`, { method: "PUT", body: { password, password_confirmation: confirmation }, mutatesState: true }); }
   issueToken(deviceId: string) { return this.request<{ device_id: string; device_token: string }>(`/api/v1/admin/devices/${deviceId}/token`, { method: "POST", mutatesState: true }); }
   revokeToken(deviceId: string) { return this.request<void>(`/api/v1/admin/devices/${deviceId}/token`, { method: "DELETE", mutatesState: true }); }
-  addBonus(deviceId: string, minutes: number) { return this.request(`/api/v1/admin/devices/${deviceId}/bonus`, { method: "POST", body: { minutes }, mutatesState: true }); }
+  addBonus(deviceId: string, minutes: number) { return this.request<{ message: string; operation_id: string }>(`/api/v1/admin/devices/${deviceId}/bonus`, { method: "POST", body: { minutes }, mutatesState: true }); }
+  loadBonusStatus(deviceId: string, operationId: string) { return this.request<{ acknowledged: boolean }>(`/api/v1/admin/devices/${deviceId}/commands/${operationId}`); }
   queueCommand(deviceId: string, command: "pause_monitoring" | "resume_monitoring" | "block_now" | "clear_manual_block") {
     return this.request(`/api/v1/admin/devices/${deviceId}/commands`, { method: "POST", body: { command }, mutatesState: true });
   }

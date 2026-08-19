@@ -52,18 +52,27 @@ test("login obtains CSRF token and uses credentialed JSON requests", async () =>
 
 test("state-changing calls send the session CSRF header", async () => {
   const requests = [];
+  const responses = [
+    { authenticated: true, login: "admin", csrf_token: "session-csrf" },
+    { message: "bonus queued", operation_id: "operation-123" },
+    { acknowledged: false },
+  ];
   const client = loadAPIClient(async (url, options) => {
     requests.push({ url, options });
-    return jsonResponse({ authenticated: true, login: "admin", csrf_token: "session-csrf" });
+    return jsonResponse(responses.shift());
   });
   await client.loadSession();
-  await client.addBonus("device-123", 15);
+  const confirmation = await client.addBonus("device-123", 15);
+  const status = await client.loadBonusStatus("device-123", confirmation.operation_id);
 
   const bonusRequest = requests[1];
   assert.equal(bonusRequest.url, "https://api.example.test/api/v1/admin/devices/device-123/bonus");
   assert.equal(bonusRequest.options.method, "POST");
   assert.equal(bonusRequest.options.headers.get("X-CSRF-Token"), "session-csrf");
   assert.deepEqual(JSON.parse(bonusRequest.options.body), { minutes: 15 });
+  assert.equal(confirmation.operation_id, "operation-123");
+  assert.equal(status.acknowledged, false);
+  assert.equal(requests[2].url, "https://api.example.test/api/v1/admin/devices/device-123/commands/operation-123");
 });
 
 test("initial setup creates the administrator after installation", async () => {

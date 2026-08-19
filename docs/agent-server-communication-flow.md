@@ -3,9 +3,9 @@
 Status: fluxo implementado e validado por testes automatizados; ensaio real
 ponta a ponta ainda pendente antes de distribuir outro pacote do agente.
 
-## Problema encontrado
+## Problema histórico corrigido
 
-O protocolo atual não entrega um saldo pronto ao agente. O heartbeat devolve
+O protocolo anterior não entregava um saldo pronto ao agente. O heartbeat devolvia
 uma política com cota semanal, rotinas e comandos. O agente grava política,
 consumo e bônus no SQLite e executa novamente o cálculo
 `cota do dia - consumo + bônus` em cada ciclo.
@@ -33,7 +33,7 @@ flowchart TD
     K --> H
 ```
 
-Consequências do fluxo atual:
+Consequências daquele fluxo:
 
 - o servidor não informa `remaining_seconds` ao agente;
 - o agente conhece e recalcula a cota total;
@@ -85,7 +85,7 @@ flowchart TD
     F --> G{Vigilância pausada?}
     G -- Sim --> H[Liberar sem descontar tempo]
     G -- Não --> I{Rotina ativa?}
-    I -- Sim --> J[Solicitar logout normal]
+    I -- Sim --> J[Bloquear a sessão gráfica]
     I -- Não --> K{Saldo confirmado maior que zero?}
     K -- Não --> J
     K -- Sim --> L[Criar âncora local da sessão]
@@ -105,7 +105,7 @@ flowchart TD
 | Componente | Responsabilidade |
 |---|---|
 | Servidor | Autoridade sobre cota, bônus remoto, pausa, bloqueio e cálculo do saldo confirmado no início da sessão. |
-| Agente | Medir tempo decorrido com relógio monotônico, verificar rotinas e aplicar logout seguro. |
+| Agente | Medir tempo decorrido com relógio monotônico, verificar rotinas e bloquear a sessão gráfica pelo logind. |
 | SQLite local | Guardar a última âncora confirmada, consumo ainda não enviado e rotinas para reinício ou queda de rede; não criar uma fonte independente de saldo. |
 | Heartbeat | Enviar consumo, presença de sessão gráfica e eventos; devolver estado completo somente na autorização inicial ou quando algo relevante mudar. |
 | Painel | Mostrar o estado do servidor e enviar alterações; não participar da contagem do agente. |
@@ -125,6 +125,10 @@ confirmado_em
 
 Vigilância, bloqueio manual, rotinas e aviso permanecem na política revisionada;
 não são duplicados dentro da âncora de saldo.
+
+A política é uma substituição completa. Uma revisão com `routines` ausente ou
+vazio remove todas as rotinas locais anteriores; rotina desativada não entra na
+avaliação nem agenda alerta.
 
 O agente cria uma âncora com `saldo_confirmado_segundos` e `confirmado_em`.
 Durante a sessão, o saldo operacional é apenas:
@@ -150,6 +154,33 @@ Uma resposta sem mudança relevante não substitui a âncora nem devolve segundo
 ao contador. Uma alteração que afete o uso gera uma nova revisão e um novo
 estado confirmado; essa é uma nova âncora excepcional, não uma leitura repetida
 da cota a cada ciclo.
+
+## Bônus remoto
+
+O bônus remoto é um incremento de crédito, sem data escolhida pelo navegador ou
+pelo relógio do servidor. O fluxo é único:
+
+1. a API grava o comando e a nova revisão na mesma transação;
+2. a interface recebe o identificador da operação e mostra **Sincronizando**,
+   sem alterar o saldo localmente;
+3. no heartbeat, o servidor associa o crédito à data local informada pelo
+   agente e devolve uma nova âncora de sessão;
+4. o agente persiste primeiro política e âncora, depois grava o comando como
+   aplicado;
+5. no heartbeat seguinte, o agente reconhece o identificador;
+6. somente depois desse reconhecimento o status administrativo apresenta o
+   crédito e a interface recarrega o saldo.
+
+Repetições de resposta, heartbeat ou reconhecimento são idempotentes pelo UUID
+do comando. Créditos remanescentes não atravessam a virada da data local.
+
+## Compatibilidade do protocolo
+
+O endpoint continua em `/api/v1/device/heartbeat`, mas o agente informa a
+capacidade atual no cabeçalho `X-Compasso-Protocol-Version: 2`. O cabeçalho é
+ignorado por servidores antigos, portanto o agente deve ser atualizado antes
+do servidor. Se existir bônus novo pendente para um agente sem o cabeçalho, o
+servidor responde HTTP 426 e não materializa nem entrega o comando incompatível.
 
 ## Comportamento offline
 
