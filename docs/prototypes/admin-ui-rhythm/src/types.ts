@@ -1,4 +1,26 @@
-export type View = "now" | "limits" | "routines" | "administration";
+export type View = "now" | "limits" | "routines" | "administration" | "communication";
+
+export type CommunicationParty = "agent" | "api" | "interface";
+export type CommunicationResult = "success" | "warning" | "error";
+
+export interface CommunicationLog {
+  id: number;
+  device_id: string;
+  source: CommunicationParty;
+  target: CommunicationParty;
+  operation: string;
+  result: CommunicationResult;
+  http_status?: number;
+  duration_ms?: number;
+  summary: string;
+  details: Record<string, string>;
+  created_at: string;
+}
+
+export interface CommunicationResponse {
+  events: CommunicationLog[];
+  retention_days: number;
+}
 
 export interface Routine {
   id: string;

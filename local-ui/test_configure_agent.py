@@ -7,11 +7,17 @@ from configure_agent import (
     controlled_user_confirmation_text,
     initial_controlled_user,
     run_privileged_configuration,
+    synchronization_status_text,
     validate_form,
 )
 
 
 class AgentSetupLogicTest(unittest.TestCase):
+    def test_synchronization_status_text_is_never_static(self):
+        self.assertIn("online", synchronization_status_text("online"))
+        self.assertIn("sem comunicação", synchronization_status_text("offline"))
+        self.assertIn("Aguardando", synchronization_status_text("checking"))
+
     def test_default_server_uses_https(self):
         self.assertEqual(DEFAULT_SERVER_URL, "https://apicompasso.smresume.com")
 

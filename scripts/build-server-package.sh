@@ -5,9 +5,14 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 default_version="$(sed -n 's/^Version: //p' "${project_root}/packaging/debian/control")"
 package_version="${1:-${default_version}}"
 package_architecture="all"
+container_version="${package_version//\~/-}"
 
 if ! dpkg --validate-version "${package_version}"; then
   echo "erro: versão Debian inválida: ${package_version}" >&2
+  exit 1
+fi
+if [[ ! "${container_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "erro: versão não pode ser convertida em uma tag Docker válida: ${package_version}" >&2
   exit 1
 fi
 
@@ -37,7 +42,7 @@ install -m 0644 "${project_root}/go.mod" "${project_root}/go.sum" \
   "${application_root}/"
 install -m 0644 "${project_root}/.env.server.example" \
   "${package_root}/etc/compasso-server/compasso.env"
-sed -i "s/^COMPASSO_VERSION=.*/COMPASSO_VERSION=${package_version}/" \
+sed -i "s/^COMPASSO_VERSION=.*/COMPASSO_VERSION=${container_version}/" \
   "${package_root}/etc/compasso-server/compasso.env"
 ln -s /etc/compasso-server/compasso.env "${application_root}/.env"
 

@@ -23,11 +23,19 @@ fi
 dpkg-deb --extract "${package_path}" "${temporary_directory}/root"
 dpkg-deb --control "${package_path}" "${temporary_directory}/control"
 package_root="${temporary_directory}/root/opt/compasso-server"
+packaged_container_version="$(sed -n 's/^COMPASSO_VERSION=//p' \
+  "${temporary_directory}/root/etc/compasso-server/compasso.env")"
+expected_container_version="${package_version//\~/-}"
 
 sh -n "${temporary_directory}/control/postinst"
 test -L "${package_root}/.env"
 test "$(readlink "${package_root}/.env")" = /etc/compasso-server/compasso.env
 test -f "${temporary_directory}/root/etc/compasso-server/compasso.env"
+test "${packaged_container_version}" = "${expected_container_version}"
+if [[ ! "${packaged_container_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "erro: COMPASSO_VERSION não é uma tag Docker válida" >&2
+  exit 1
+fi
 test -f "${package_root}/compose.yaml"
 test -x "${package_root}/scripts/install-server.sh"
 test ! -e "${package_root}/secrets"

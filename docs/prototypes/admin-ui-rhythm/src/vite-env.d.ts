@@ -1,2 +1,2 @@
 /// <reference types="vite/client" />
-interface Window { COMPASSO_CONFIG?: { apiBaseUrl?: string } }
+interface Window { COMPASSO_CONFIG?: { apiBaseUrl?: string; apiBaseURL?: string } }

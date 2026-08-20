@@ -108,17 +108,6 @@ func run(configPath string, logger *log.Logger) error {
 		return err
 	}
 	policyDaemon.SetAlertNotifier(desktopNotifier)
-	localBonus, err := localauth.NewService(store)
-	if err != nil {
-		return err
-	}
-	localServer, err := localapi.ExportSystem(localBonus)
-	if err != nil {
-		logger.Printf("local D-Bus API unavailable: %v", err)
-	} else {
-		defer localServer.Close()
-		logger.Printf("local D-Bus API ready name=%s", localapi.BusName)
-	}
 	logger.Printf("starting controlled_user=%s database=%s", settings.ControlledUser, settings.DatabasePath)
 	synchronizer, err := syncclient.New(store, &http.Client{Timeout: settings.HTTPTimeout}, syncclient.Config{
 		ServerURL: settings.ServerURL, DeviceID: settings.DeviceID,
@@ -127,6 +116,17 @@ func run(configPath string, logger *log.Logger) error {
 	})
 	if err != nil {
 		return err
+	}
+	localBonus, err := localauth.NewService(store)
+	if err != nil {
+		return err
+	}
+	localServer, err := localapi.ExportSystem(localBonus, synchronizer)
+	if err != nil {
+		logger.Printf("local D-Bus API unavailable: %v", err)
+	} else {
+		defer localServer.Close()
+		logger.Printf("local D-Bus API ready name=%s", localapi.BusName)
 	}
 	runtimeDirectory := os.Getenv("RUNTIME_DIRECTORY")
 	if runtimeDirectory != "" {

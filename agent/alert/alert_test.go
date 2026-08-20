@@ -19,11 +19,14 @@ func TestTrackerReturnsCrossedRoutineThresholds(t *testing.T) {
 		t.Fatalf("initial alerts=%+v err=%v", alerts, err)
 	}
 	alerts, err := tracker.Due(decision, 10, cycle, blockAt.Add(-time.Minute), true)
-	if err != nil || len(alerts) != 3 {
+	if err != nil || len(alerts) != 1 {
 		t.Fatalf("routine alerts=%+v err=%v", alerts, err)
 	}
-	if alerts[0].Kind != AlertPrimary || alerts[1].Kind != AlertFiveMinute || alerts[2].Kind != AlertOneMinute {
-		t.Fatalf("unexpected alert kinds: %+v", alerts)
+	if alerts[0].Kind != AlertOneMinute {
+		t.Fatalf("most urgent alert was not selected: %+v", alerts)
+	}
+	if repeated, err := tracker.Due(decision, 10, cycle, blockAt.Add(-time.Minute+time.Second), true); err != nil || len(repeated) != 0 {
+		t.Fatalf("consumed thresholds were repeated: %+v err=%v", repeated, err)
 	}
 }
 
@@ -103,6 +106,27 @@ func TestTrackerStartsNewCycleAfterBalanceIncrease(t *testing.T) {
 	}
 }
 
+func TestTrackerDoesNotRearmAfterSmallBalanceCorrection(t *testing.T) {
+	cycle := Cycle{PolicyRevision: 1, SessionID: "session-3", LocalDate: "2026-08-08"}
+	var tracker Tracker
+	start := time.Date(2026, 8, 8, 14, 0, 0, 0, time.Local)
+	decision := policy.Decision{
+		Allowed: true, Remaining: 61 * time.Second,
+		NextBlockAt: start.Add(61 * time.Second), NextBlockReason: policy.ReasonQuota,
+	}
+	_, _ = tracker.Due(decision, 1, cycle, start, true)
+	decision.Remaining = time.Minute
+	alerts, _ := tracker.Due(decision, 1, cycle, start.Add(time.Second), true)
+	if len(alerts) != 1 {
+		t.Fatalf("initial alert=%+v", alerts)
+	}
+	decision.Remaining += time.Second
+	decision.NextBlockAt = decision.NextBlockAt.Add(2 * time.Second)
+	if alerts, err := tracker.Due(decision, 1, cycle, start.Add(2*time.Second), true); err != nil || len(alerts) != 0 {
+		t.Fatalf("small correction rearmed alert: %+v err=%v", alerts, err)
+	}
+}
+
 func TestTrackerRejectsInvalidInputs(t *testing.T) {
 	decision := policy.Decision{Allowed: true, NextBlockAt: time.Now().Add(time.Hour)}
 	var tracker Tracker
@@ -111,5 +135,28 @@ func TestTrackerRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := tracker.Due(decision, 10, Cycle{}, time.Time{}, true); err == nil {
 		t.Fatal("zero current time unexpectedly accepted")
+	}
+}
+
+func TestTenMinuteWarningDoesNotFireWithThirtyOneMinutesRemaining(t *testing.T) {
+	start := time.Date(2026, 8, 13, 23, 0, 0, 0, time.Local)
+	blockAt := start.Add(31 * time.Minute)
+	cycle := Cycle{PolicyRevision: 2, SessionID: "session", LocalDate: "2026-08-13"}
+	decision := policy.Decision{
+		Allowed: true, Remaining: 31 * time.Minute,
+		NextBlockAt: blockAt, NextBlockReason: policy.ReasonQuota,
+	}
+	var tracker Tracker
+	if alerts, err := tracker.Due(decision, 10, cycle, start, true); err != nil || len(alerts) != 0 {
+		t.Fatalf("initial alerts=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = 11 * time.Minute
+	if alerts, err := tracker.Due(decision, 10, cycle, start.Add(20*time.Minute), true); err != nil || len(alerts) != 0 {
+		t.Fatalf("early alerts=%+v err=%v", alerts, err)
+	}
+	decision.Remaining = 10 * time.Minute
+	alerts, err := tracker.Due(decision, 10, cycle, start.Add(21*time.Minute), true)
+	if err != nil || len(alerts) != 1 || alerts[0].Kind != AlertPrimary {
+		t.Fatalf("ten-minute alerts=%+v err=%v", alerts, err)
 	}
 }

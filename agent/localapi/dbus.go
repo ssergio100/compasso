@@ -20,15 +20,36 @@ const (
 
 // bonusAPI translates D-Bus requests into the local bonus service.
 type bonusAPI struct {
-	service *localauth.Service
-	now     func() time.Time
+	service         *localauth.Service
+	synchronization synchronizationSource
+	now             func() time.Time
 }
 
-func newBonusAPI(service *localauth.Service) (*bonusAPI, error) {
+type synchronizationSource interface {
+	SynchronizationStatus() (checked, online bool)
+}
+
+func newBonusAPI(service *localauth.Service, synchronization synchronizationSource) (*bonusAPI, error) {
 	if service == nil {
 		return nil, errors.New("local bonus service is required")
 	}
-	return &bonusAPI{service: service, now: time.Now}, nil
+	if synchronization == nil {
+		return nil, errors.New("synchronization source is required")
+	}
+	return &bonusAPI{service: service, synchronization: synchronization, now: time.Now}, nil
+}
+
+// GetSynchronizationStatus returns the live heartbeat state without exposing
+// credentials or connection error details.
+func (a *bonusAPI) GetSynchronizationStatus() (string, *dbus.Error) {
+	checked, online := a.synchronization.SynchronizationStatus()
+	if !checked {
+		return "checking", nil
+	}
+	if online {
+		return "online", nil
+	}
+	return "offline", nil
 }
 
 // AddLocalBonus is called by the unprivileged GTK dialog. The password is
@@ -57,8 +78,8 @@ type Server struct {
 	connection *dbus.Conn
 }
 
-func ExportSystem(service *localauth.Service) (*Server, error) {
-	api, err := newBonusAPI(service)
+func ExportSystem(service *localauth.Service, synchronization synchronizationSource) (*Server, error) {
+	api, err := newBonusAPI(service, synchronization)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +102,11 @@ func ExportSystem(service *localauth.Service) (*Server, error) {
 					{Name: "password", Type: "s", Direction: "in"},
 					{Name: "seconds", Type: "u", Direction: "in"},
 					{Name: "event_uuid", Type: "s", Direction: "out"},
+				},
+			}, {
+				Name: "GetSynchronizationStatus",
+				Args: []introspect.Arg{
+					{Name: "status", Type: "s", Direction: "out"},
 				},
 			}},
 		}, introspect.IntrospectData},

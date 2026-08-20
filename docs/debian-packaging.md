@@ -13,9 +13,10 @@ Na raiz do repositório, execute:
 ./scripts/build-all-debian-packages.sh
 ```
 
-O script compila os binários portáteis do cliente e gera os dois pacotes com a
-versão declarada em `packaging/debian/control`. Docker é necessário para a
-compilação portátil do cliente.
+O script lê a versão registrada em `packaging/debian/control`, incrementa o
+contador final `~pilotN`, atualiza esse arquivo e gera os dois pacotes com a
+nova versão. Por exemplo, `0.1.0~pilot23` passa para `0.1.0~pilot24`. Docker é
+necessário para a compilação portátil do cliente.
 
 Valide os artefatos com:
 
@@ -57,3 +58,6 @@ configuração editável em `/etc/compasso-server/compasso.env`. A instalação 
 ```bash
 sudo /opt/compasso-server/scripts/install-server.sh
 ```
+
+A versão Debian usa `~pilotN`; a tag da imagem Docker gerada pelo pacote usa
+`-pilotN`, pois tags Docker não aceitam `~`.

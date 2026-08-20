@@ -62,7 +62,7 @@ func New(
 	mux.HandleFunc("/api/v1/admin/setup", app.adminSetupAPI)
 	mux.HandleFunc("/api/v1/admin/devices", app.adminDevicesAPI)
 	mux.HandleFunc("/api/v1/admin/devices/", app.adminDeviceAPI)
-	app.handler = app.corsHeaders(securityHeaders(mux, secureCookies))
+	app.handler = app.corsHeaders(securityHeaders(app.logAdministrativeCommunication(mux), secureCookies))
 	return app, nil
 }
 
