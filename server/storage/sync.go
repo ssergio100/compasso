@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	protocol "github.com/ssergio100/compasso/protocol/v1"
@@ -179,7 +180,7 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 
 	acknowledged := make([]string, 0, len(request.Events))
 	for _, event := range request.Events {
-		if err := receiveEvent(ctx, tx, deviceID, event); err != nil {
+		if err := receiveEvent(ctx, tx, deviceID, event, now); err != nil {
 			return protocol.HeartbeatResponse{}, err
 		}
 		acknowledged = append(acknowledged, event.UUID)
@@ -188,11 +189,46 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		if !validOpaqueIdentifier(commandID) {
 			return protocol.HeartbeatResponse{}, errors.New("invalid command acknowledgement")
 		}
-		if _, err := tx.ExecContext(ctx, `
+		commandResult, err := tx.ExecContext(ctx, `
 			UPDATE device_command SET acknowledged_at=COALESCE(acknowledged_at, ?)
-			WHERE id=? AND device_id=?`, stamp, commandID, deviceID); err != nil {
+			WHERE id=? AND device_id=?`, stamp, commandID, deviceID)
+		if err != nil {
 			return protocol.HeartbeatResponse{}, err
 		}
+		matchedCommand, err := commandResult.RowsAffected()
+		if err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+		// Agents keep applied command identifiers durably and may acknowledge a
+		// command after its server-side history expired or after a restore. These
+		// historical acknowledgements were always harmless and must not reject the
+		// entire heartbeat merely because no activity can be updated.
+		if matchedCommand == 0 {
+			continue
+		}
+		activityResult, err := tx.ExecContext(ctx, `
+			UPDATE activity SET
+				status='completed',
+				completed_at=COALESCE(completed_at, ?),
+				expires_at=COALESCE(expires_at, ?)
+			WHERE id=? AND device_id=?`, stamp,
+			formatTime(now.AddDate(0, 0, completedActivityRetentionDays)), commandID, deviceID)
+		if err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+		matchedActivity, err := activityResult.RowsAffected()
+		if err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+		if matchedActivity == 0 {
+			continue
+		}
+		if err := upsertActivityStep(ctx, tx, commandID, "completed", "device", now, nil, false); err != nil {
+			return protocol.HeartbeatResponse{}, err
+		}
+	}
+	if _, err := cleanupExpiredCompletedActivitiesIfDue(ctx, tx, now); err != nil {
+		return protocol.HeartbeatResponse{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -223,14 +259,14 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		}
 		response.SessionState = &state
 	}
-	response.Commands, err = s.pendingCommands(ctx, deviceID, 100)
+	response.Commands, err = s.pendingCommands(ctx, deviceID, 100, now)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
 	}
 	return response, nil
 }
 
-func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protocol.PendingEvent) error {
+func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protocol.PendingEvent, observedAt time.Time) error {
 	if !validOpaqueIdentifier(event.UUID) || event.Kind != "bonus_added" || event.CreatedAt.IsZero() || len(event.Payload) == 0 || len(event.Payload) > 16<<10 || !json.Valid(event.Payload) {
 		return errors.New("invalid pending event")
 	}
@@ -262,7 +298,7 @@ func receiveEvent(ctx context.Context, tx *sql.Tx, deviceID string, event protoc
 		VALUES (?, ?, 'bonus_added', 'local', ?, ?)`, event.UUID, deviceID, string(sanitizedPayload), formatTime(event.CreatedAt)); err != nil {
 		return fmt.Errorf("audit local bonus event: %w", err)
 	}
-	return nil
+	return insertLocalBonusActivity(ctx, tx, event.UUID, deviceID, bonus.Seconds, bonus.LocalDate, event.CreatedAt, observedAt)
 }
 
 // applyPendingRemoteBonuses turns queued credit increments into today's
@@ -355,14 +391,13 @@ func validOpaqueIdentifier(identifier string) bool {
 	return true
 }
 
-func (s *Store) pendingCommands(ctx context.Context, deviceID string, limit int) ([]protocol.Command, error) {
+func (s *Store) pendingCommands(ctx context.Context, deviceID string, limit int, now time.Time) ([]protocol.Command, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, kind, payload_json, created_at FROM device_command
 		WHERE device_id=? AND acknowledged_at IS NULL ORDER BY created_at, id LIMIT ?`, deviceID, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var commands []protocol.Command
 	for rows.Next() {
 		var command protocol.Command
@@ -377,7 +412,56 @@ func (s *Store) pendingCommands(ctx context.Context, deviceID string, limit int)
 		}
 		commands = append(commands, command)
 	}
-	return commands, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
+		return commands, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	stamp := formatTime(now)
+	for _, command := range commands {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE device_command SET
+				delivery_attempts=delivery_attempts+1,
+				first_offered_at=COALESCE(first_offered_at, ?),
+				last_offered_at=?
+			WHERE id=? AND device_id=? AND acknowledged_at IS NULL`,
+			stamp, stamp, command.ID, deviceID); err != nil {
+			return nil, fmt.Errorf("record command delivery attempt: %w", err)
+		}
+		activityResult, err := tx.ExecContext(ctx, `
+			UPDATE activity SET status='offered'
+			WHERE id=? AND device_id=? AND status!='completed'`, command.ID, deviceID)
+		if err != nil {
+			return nil, fmt.Errorf("update offered activity: %w", err)
+		}
+		matchedActivity, err := activityResult.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		// Command delivery is business-critical; the human-facing history is a
+		// projection and may be absent after retention or a repaired deployment.
+		// Never reject a heartbeat only because there is no activity to annotate.
+		if matchedActivity == 0 {
+			continue
+		}
+		if err := upsertActivityStep(ctx, tx, command.ID, "offered", "server", now, nil, true); err != nil {
+			return nil, fmt.Errorf("record activity delivery: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return commands, nil
 }
 
 func policyForAPI(policy Policy) protocol.Policy {
@@ -398,6 +482,13 @@ func policyForAPI(policy Policy) protocol.Policy {
 
 // QueueControl updates online-only control state and queues its transition.
 func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now time.Time) error {
+	_, err := s.QueueControlOperation(ctx, deviceID, kind, now)
+	return err
+}
+
+// QueueControlOperation returns the durable identifier used to follow the
+// command from the server queue until the agent acknowledges it.
+func (s *Store) QueueControlOperation(ctx context.Context, deviceID, kind string, now time.Time) (string, error) {
 	setClause := ""
 	switch kind {
 	case "pause_monitoring":
@@ -409,33 +500,39 @@ func (s *Store) QueueControl(ctx context.Context, deviceID, kind string, now tim
 	case "clear_manual_block":
 		setClause = "manual_block=0"
 	default:
-		return errors.New("unknown device control")
+		return "", errors.New("unknown device control")
 	}
 	commandID, err := newID()
 	if err != nil {
-		return err
+		return "", err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 	stamp := formatTime(now)
 	result, err := tx.ExecContext(ctx, `UPDATE device_control SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, ?, '{}', ?)`, commandID, deviceID, kind, stamp); err != nil {
-		return err
+		return "", err
+	}
+	if err := insertAdminActivity(ctx, tx, commandID, deviceID, kind, map[string]string{"command": kind}, now); err != nil {
+		return "", err
 	}
 	if err := insertAudit(ctx, tx, deviceID, kind, map[string]string{"status": "queued"}, now); err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return commandID, nil
 }
 
 func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID string, seconds int64, now time.Time) (string, error) {
@@ -460,6 +557,11 @@ func (s *Store) QueueRemoteBonus(ctx context.Context, deviceID string, seconds i
 		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO device_command(id, device_id, kind, payload_json, created_at) VALUES (?, ?, 'add_bonus', ?, ?)`, uuid, deviceID, string(payload), stamp); err != nil {
+		return "", err
+	}
+	if err := insertAdminActivity(ctx, tx, uuid, deviceID, "add_bonus", map[string]string{
+		"minutes": strconv.FormatInt(seconds/60, 10),
+	}, now); err != nil {
 		return "", err
 	}
 	if err := insertAudit(ctx, tx, deviceID, "bonus_queued", map[string]interface{}{"origin": "web", "seconds": seconds}, now); err != nil {

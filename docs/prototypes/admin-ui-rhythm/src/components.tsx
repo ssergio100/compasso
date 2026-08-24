@@ -1,8 +1,20 @@
-import { Check, ChevronDown, X } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Check, ChevronDown, RefreshCw, X } from "lucide-react";
+import { Component, useEffect, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 export function Brand() {
   return <span className="brand" aria-label="Compasso"><svg aria-hidden="true" viewBox="0 0 52 32"><path d="M5 23V18M15 23V11M26 23V4M37 23V11M47 23V18" /><path className="base" d="M4 28H48" /></svg><strong>Compasso</strong></span>;
+}
+
+export class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Falha recuperável na interface ADM:", error, info); }
+  render() {
+    if (this.state.error) {
+      return <div className="center-state" role="alert"><Brand /><h1>Não foi possível mostrar esta tela</h1><p>A ação anterior pode ter sido concluída. Recarregue para buscar o estado salvo no servidor.</p><button className="primary-button" onClick={() => window.location.reload()}><RefreshCw size={18} />Recarregar</button></div>;
+    }
+    return this.props.children;
+  }
 }
 
 export function Modal({ title, description, children, onClose }: { title: string; description?: string; children: ReactNode; onClose: () => void }) {

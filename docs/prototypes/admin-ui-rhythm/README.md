@@ -1,6 +1,8 @@
-# Compasso Rhythm
+# Interface administrativa Compasso
 
-Uma exploração independente da interface administrativa do Compasso, criada do zero a partir do conceito visual “painel de ritmo”. O projeto não altera nem depende do protótipo `admin-ui-mobile`.
+Esta é a única interface administrativa vigente do Compasso. O conceito visual
+é o “painel de ritmo”, com foco em leitura simples por pessoas sem conhecimento
+técnico.
 
 ```bash
 npm install

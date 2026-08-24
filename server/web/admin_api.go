@@ -350,7 +350,7 @@ func (a *App) adminDeviceAPI(w http.ResponseWriter, r *http.Request) {
 		a.adminDeviceRootAPI(w, r, current, deviceID)
 		return
 	}
-	if len(pathParts) > 2 && pathParts[1] != "routines" && pathParts[1] != "commands" && pathParts[1] != "communication" {
+	if len(pathParts) > 2 && pathParts[1] != "routines" && pathParts[1] != "commands" && pathParts[1] != "communication" && pathParts[1] != "activities" {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -379,6 +379,8 @@ func (a *App) adminDeviceAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	case "events":
 		a.adminDeviceEventsAPI(w, r, deviceID)
+	case "activities":
+		a.adminDeviceActivitiesAPI(w, r, current, deviceID, pathParts[2:])
 	case "communication":
 		a.adminDeviceCommunicationAPI(w, r, current, deviceID, pathParts[2:])
 	default:
@@ -609,9 +611,60 @@ func (a *App) adminDeviceBonusAPI(w http.ResponseWriter, r *http.Request, curren
 		return
 	}
 	addCommunicationDetail(r, "bonus_minutes", strconv.Itoa(request.Minutes))
+	addCommunicationDetail(r, "operation_id", operationID)
+	a.publishDeviceActivity(deviceID, operationID)
 	writeJSON(w, http.StatusAccepted, adminBonusResponse{
 		Message: "bonus queued", OperationID: operationID,
 	})
+}
+
+func (a *App) adminDeviceActivitiesAPI(w http.ResponseWriter, r *http.Request, current session, deviceID string, pathParts []string) {
+	if r.Method == http.MethodDelete && len(pathParts) == 1 && pathParts[0] == "completed" {
+		if !requireAdminCSRF(w, r, current) {
+			return
+		}
+		deleted, err := a.store.DeleteCompletedDeviceActivities(r.Context(), deviceID)
+		if !writeAdminReadError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int64{"deleted": deleted})
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodDelete)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if len(pathParts) > 1 {
+		writeJSONError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if len(pathParts) == 1 {
+		activity, err := a.store.LoadDeviceActivity(r.Context(), deviceID, pathParts[0])
+		if !writeAdminReadError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, activity)
+		return
+	}
+	if _, err := a.store.CleanupExpiredCompletedActivities(r.Context(), a.now()); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not clean completed activities")
+		return
+	}
+	limit := 100
+	if value := r.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeJSONError(w, http.StatusBadRequest, "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	activities, err := a.store.ListDeviceActivities(r.Context(), deviceID, limit)
+	if !writeAdminReadError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"activities": activities})
 }
 
 func (a *App) adminDeviceBonusStatusAPI(w http.ResponseWriter, r *http.Request, deviceID, operationID string) {
@@ -641,12 +694,15 @@ func (a *App) adminDeviceCommandAPI(w http.ResponseWriter, r *http.Request, curr
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := a.store.QueueControl(r.Context(), deviceID, request.Command, a.now()); err != nil {
+	operationID, err := a.store.QueueControlOperation(r.Context(), deviceID, request.Command, a.now())
+	if err != nil {
 		writeAdminMutationError(w, err)
 		return
 	}
 	addCommunicationDetail(r, "command", request.Command)
-	writeJSON(w, http.StatusAccepted, map[string]string{"message": "command queued"})
+	addCommunicationDetail(r, "operation_id", operationID)
+	a.publishDeviceActivity(deviceID, operationID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"message": "command queued", "operation_id": operationID})
 }
 
 func (a *App) adminDeviceEventsAPI(w http.ResponseWriter, r *http.Request, deviceID string) {

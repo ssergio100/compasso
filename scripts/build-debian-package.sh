@@ -109,6 +109,13 @@ install -m 0644 \
 install -d "${project_root}/dist"
 package_path="${project_root}/dist/${package_name}_${package_version}_${package_architecture}.deb"
 dpkg-deb --root-owner-group --build "${package_root}" "${package_path}"
-sha256sum "${package_path}" > "${package_path}.sha256"
+artifact_name="$(basename "${package_path}")"
+(
+  cd "${project_root}/dist"
+  sha256sum "${artifact_name}" > "${artifact_name}.sha256"
+)
 
-echo "Pacote Debian criado em ${package_path}"
+echo "Pacote Debian do cliente criado."
+echo "  Versão: ${package_version}"
+echo "  Arquivo: ${package_path}"
+echo "  SHA-256: $(cut -d' ' -f1 "${package_path}.sha256")"

@@ -7,6 +7,7 @@ from bonus_dialog import (
     open_settings,
     friendly_error_name,
     seconds_for_index,
+    synchronization_status_text,
     unavailable_service_message,
 )
 
@@ -53,6 +54,20 @@ class BonusDialogLogicTest(unittest.TestCase):
         self.assertEqual(
             friendly_error_name("br.com.tempo.Agent.Error.InvalidPassword"),
             "Senha incorreta.",
+        )
+
+    def test_offline_status_explains_the_real_problem(self):
+        message = synchronization_status_text(
+            "offline",
+            "O servidor recusou a sincronização (erro 400).",
+        )
+        self.assertIn("Servidor sem comunicação", message)
+        self.assertIn("erro 400", message)
+
+    def test_online_status_is_short_and_positive(self):
+        self.assertEqual(
+            synchronization_status_text("online"),
+            "● Servidor conectado",
         )
 
 

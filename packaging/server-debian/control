@@ -6,5 +6,5 @@ Section: admin
 Priority: optional
 Depends: bash, ca-certificates
 Description: servidor do controle de tempo Compasso
- API, painel administrativo, Docker Compose e ferramentas de operação do
- servidor Compasso. Docker é validado pelo instalador antes da implantação.
+ API, Docker Compose e ferramentas de operação do servidor Compasso. Docker é
+ validado pelo instalador antes da implantação. O painel é publicado à parte.

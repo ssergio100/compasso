@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,7 +40,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	result := communicationResultForStatus(status)
 	summary := "Heartbeat processado e resposta enviada ao agente."
 	if status >= 400 {
-		summary = "Heartbeat rejeitado pela API."
+		summary = details["rejection_reason"]
+		if summary == "" {
+			summary = "O servidor recusou a atualização enviada pelo computador."
+		}
 	}
 	heartbeatLog, _ := a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
 		DeviceID: deviceID, Source: "agent", Target: "api", Operation: "heartbeat",
@@ -112,8 +116,13 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 	details["used_seconds"] = strconv.FormatInt(request.SecondsUsed, 10)
 	details["request_events"] = strconv.Itoa(len(request.Events))
 	details["command_acknowledgements"] = strconv.Itoa(len(request.CommandAcks))
-	response, err := a.store.ReceiveHeartbeat(r.Context(), deviceID, request, a.now())
+	heartbeatNow := a.now()
+	response, err := a.store.ReceiveHeartbeat(r.Context(), deviceID, request, heartbeatNow)
 	if err != nil {
+		details["rejection_reason"] = humanHeartbeatRejection(err)
+		details["failure_stage"] = "processamento_no_servidor"
+		log.Printf("heartbeat rejected device_id=%s correlation_id=%s error=%v",
+			deviceID, details["correlation_id"], err)
 		status := http.StatusBadRequest
 		var revisionError *storage.RevisionAheadError
 		if errors.As(err, &revisionError) {
@@ -136,7 +145,39 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 	details["response_commands"] = strconv.Itoa(len(response.Commands))
 	details["acknowledged_events"] = strconv.Itoa(len(response.AcknowledgedEvents))
 	a.publishDeviceStatus(deviceID, "status")
+	for _, command := range response.Commands {
+		a.publishDeviceActivity(deviceID, command.ID)
+	}
+	for _, activityID := range request.CommandAcks {
+		a.publishDeviceActivity(deviceID, activityID)
+	}
+	for _, event := range request.Events {
+		if event.Kind == "bonus_added" {
+			a.publishDeviceActivity(deviceID, event.UUID)
+		}
+	}
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func humanHeartbeatRejection(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "no such table: activity"):
+		return "O histórico de atividades do servidor ainda não estava pronto."
+	case strings.Contains(message, "FOREIGN KEY constraint failed"):
+		return "O servidor encontrou um registro histórico inconsistente."
+	case strings.Contains(message, "pending event"), strings.Contains(message, "bonus local"),
+		strings.Contains(message, "local bonus"), strings.Contains(message, "bonus local date"):
+		return "O servidor não reconheceu uma atividade pendente enviada pelo computador."
+	case strings.Contains(message, "command acknowledgement"):
+		return "O servidor não reconheceu a confirmação de uma ação anterior."
+	case strings.Contains(message, "graphical session"):
+		return "O computador enviou uma identificação de sessão que o servidor não reconheceu."
+	case strings.Contains(message, "heartbeat counters"), strings.Contains(message, "heartbeat local date"):
+		return "O computador enviou informações de tempo que o servidor não conseguiu validar."
+	default:
+		return "O servidor não conseguiu consolidar a atualização enviada pelo computador."
+	}
 }
 
 func heartbeatCarriedState(details map[string]string) bool {

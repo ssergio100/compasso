@@ -68,5 +68,13 @@ install -m 0644 "${project_root}/docs/server-compose-plan.md" \
 
 package_path="${project_root}/dist/compasso-server_${package_version}_${package_architecture}.deb"
 dpkg-deb --root-owner-group --build "${package_root}" "${package_path}"
-sha256sum "${package_path}" > "${package_path}.sha256"
-echo "Pacote Debian do servidor criado em ${package_path}"
+package_name="$(basename "${package_path}")"
+(
+  cd "${project_root}/dist"
+  sha256sum "${package_name}" > "${package_name}.sha256"
+)
+
+echo "Pacote Debian do servidor criado."
+echo "  Versão: ${package_version}"
+echo "  Arquivo: ${package_path}"
+echo "  SHA-256: $(cut -d' ' -f1 "${package_path}.sha256")"

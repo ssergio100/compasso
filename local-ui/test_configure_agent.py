@@ -14,9 +14,16 @@ from configure_agent import (
 
 class AgentSetupLogicTest(unittest.TestCase):
     def test_synchronization_status_text_is_never_static(self):
-        self.assertIn("online", synchronization_status_text("online"))
+        self.assertIn("conectado", synchronization_status_text("online"))
         self.assertIn("sem comunicação", synchronization_status_text("offline"))
         self.assertIn("Aguardando", synchronization_status_text("checking"))
+
+    def test_synchronization_error_is_visible_to_a_person(self):
+        message = synchronization_status_text(
+            "offline",
+            "O servidor recusou a sincronização (erro 400).",
+        )
+        self.assertIn("erro 400", message)
 
     def test_default_server_uses_https(self):
         self.assertEqual(DEFAULT_SERVER_URL, "https://apicompasso.smresume.com")

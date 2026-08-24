@@ -162,6 +162,43 @@ func (a *App) publishCommunicationLog(deviceID string, log storage.Communication
 	a.hub.publish(deviceID, streamEvent{Name: "communication", Data: data})
 }
 
+func (a *App) publishDeviceActivity(deviceID, activityID string) {
+	if !a.hub.hasSubscribers(deviceID) {
+		return
+	}
+	activity, err := a.store.LoadDeviceActivity(context.Background(), deviceID, activityID)
+	if err != nil {
+		return
+	}
+	a.publishActivity(activity)
+}
+
+func (a *App) publishActivity(activity storage.DeviceActivity) {
+	if !a.hub.hasSubscribers(activity.DeviceID) {
+		return
+	}
+	data, err := json.Marshal(activity)
+	if err != nil {
+		return
+	}
+	a.hub.publish(activity.DeviceID, streamEvent{Name: "activity_updated", Data: data})
+}
+
+// publishActivitiesChanged asks the active administrative view to reload the
+// durable activity list after a successful mutation. It complements the
+// detailed activity_updated event and closes the race where that event could
+// arrive just before an older screen-loading request completed.
+func (a *App) publishActivitiesChanged(deviceID string) {
+	if !a.hub.hasSubscribers(deviceID) {
+		return
+	}
+	data, err := json.Marshal(map[string]string{"device_id": deviceID})
+	if err != nil {
+		return
+	}
+	a.hub.publish(deviceID, streamEvent{Name: "activities_changed", Data: data})
+}
+
 // StartOfflineDetector publishes "device_offline" when the online timeout
 // expires without heartbeats. Heartbeats publishing "status" naturally reset
 // the offline state in the panel.

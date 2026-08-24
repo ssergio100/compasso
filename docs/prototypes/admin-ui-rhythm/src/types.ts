@@ -22,6 +22,35 @@ export interface CommunicationResponse {
   retention_days: number;
 }
 
+export type DeviceActivityStatus = "waiting_device" | "offered" | "completed" | "attention" | "failed";
+export type DeviceActivityOrigin = "admin" | "device" | "server";
+export type LiveStreamState = "connecting" | "live" | "interrupted";
+
+export interface ActivityStep {
+  kind: string;
+  actor: DeviceActivityOrigin;
+  occurred_at: string;
+  last_occurred_at: string;
+  occurrences: number;
+  details: Record<string, string>;
+}
+
+export interface DeviceActivity {
+  id: string;
+  device_id: string;
+  kind: string;
+  origin: DeviceActivityOrigin;
+  status: DeviceActivityStatus;
+  details: Record<string, string>;
+  occurred_at: string;
+  observed_at: string;
+  completed_at?: string;
+  expires_at?: string;
+  steps: ActivityStep[];
+}
+
+export interface DeviceActivitiesResponse { activities: DeviceActivity[] }
+
 export interface Routine {
   id: string;
   name: string;

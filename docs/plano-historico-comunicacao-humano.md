@@ -17,7 +17,23 @@ Este plano se aplica somente a:
 - `protocol/v1`, `agent/syncclient` e `agent/storage` somente quando for
   necessário confirmar entrega, aplicação ou falha no computador.
 
-Não contempla `admin-ui`, `local-ui` nem outros protótipos.
+Não contempla a interface local do agente (`local-ui`).
+
+## Estado da implementação
+
+Primeiro fluxo vertical concluído:
+
+- bônus remoto;
+- pausa e retomada do monitoramento;
+- bloqueio e desbloqueio administrativos;
+- estados “aguardando computador”, “aguardando confirmação” e “concluído”;
+- contagem de tentativas reais servidor → agente;
+- atualização da operação por SSE, sem polling de dois segundos;
+- tela humana “Ações e resultados” e diagnóstico técnico separado.
+
+Políticas, limites, rotinas e senha continuam na etapa posterior descrita neste
+plano, pois a confirmação deles é feita por revisão aplicada, não por
+`command_acks`.
 
 ## Problema atual
 
@@ -71,9 +87,6 @@ importantes:
    operação atualizam a contagem, mas não criam novas histórias nem novo bônus.
 9. **Eventos técnicos continuam disponíveis.** O diagnóstico bruto permanece
    separado do histórico humano, com retenção e acesso próprios.
-10. **A criação também é idempotente.** A interface gera uma chave antes do
-    envio; repetir a mesma requisição por clique duplo, timeout ou reconexão
-    devolve a operação já criada em vez de conceder o benefício novamente.
 
 ## Mapa da comunicação
 
@@ -159,10 +172,10 @@ Pausa do monitoramento do Zorin                                  Concluído
 O Zorin confirmou a alteração após 3 tentativas de entrega.
 ```
 
-### Exemplo que denuncia duas submissões
+### Exemplo com duas ações distintas
 
-Duas chamadas distintas de criação devem produzir duas histórias fáceis de
-comparar:
+Duas concessões feitas pelo administrador devem produzir duas histórias fáceis
+de comparar:
 
 ```text
 15 min adicionados ao Zorin · 20:54:11                           Concluído
@@ -186,27 +199,29 @@ Manter dois conceitos:
 O `communication_log` atual pode continuar como registro técnico durante a
 migração, mas não deve alimentar diretamente a lista humana.
 
-### Projeção de operação
+### Projeção de atividade implementada
 
-Criar uma estrutura persistente, por exemplo `operation_activity`, com:
+A estrutura persistente `activity` é uma projeção exclusivamente humana. Ela
+não substitui `bonus`, `device_command`, políticas nem auditoria, que
+continuam sendo as fontes de verdade. A projeção contém:
 
 - `id`: o mesmo identificador opaco do comando quando existir;
 - `device_id`;
 - `kind`: bônus, pausa, retomada, bloqueio, política, rotina, senha etc.;
 - `origin`: administrador, agente local ou sistema;
-- `requested_by`: nome não sensível do administrador, quando disponível;
 - `status`;
-- campos de negócio sanitizados, como `bonus_seconds` ou `command_kind`;
-- `expected_policy_revision`, quando a confirmação ocorrer por revisão;
-- `delivery_attempts`;
-- `created_at`, `first_offered_at`, `last_offered_at`, `acknowledged_at`;
-- `attention_code` ou `failure_code` estável, sem texto sensível;
-- `updated_at`.
+- detalhes sanitizados, como minutos e tipo do comando;
+- `occurred_at`, `observed_at`, `completed_at` e `expires_at`;
+- `hidden_at`, usado para limpar a visualização sem apagar o dado real.
 
-Se for necessária auditoria de cada mudança de estado, complementar com
-`operation_activity_event`. A operação é a visão atual; os eventos são a linha
-do tempo. Não duplicar saldo, política ou comando nessa estrutura: as tabelas de
-domínio continuam sendo a fonte de verdade.
+A tabela `activity_step` forma a linha do tempo e agrega repetições da mesma
+etapa. Para comandos do ADM, usa pedido, armazenamento, oferta e confirmação.
+Para bônus local, usa criação no computador, sincronização e confirmação do
+servidor. O identificador do evento local ou do comando garante idempotência.
+
+A limpeza manual apenas preenche `hidden_at`. Isso também evita que uma
+retransmissão faça uma atividade limpa reaparecer. A remoção física ocorre
+automaticamente 30 dias depois da conclusão.
 
 ### Instrumentar `device_command`
 
@@ -278,22 +293,14 @@ Toda ação assíncrona deve retornar um envelope comum:
 }
 ```
 
-A interface envia uma `Idempotency-Key` opaca, criada uma vez por confirmação
-do usuário. O servidor persiste a chave vinculada ao dispositivo, tipo e
-administrador e devolve a mesma operação quando recebe novamente a mesma
-requisição. Reutilizar uma chave com conteúdo diferente deve ser rejeitado.
-
-O botão também fica indisponível imediatamente por uma trava síncrona, antes da
-próxima renderização do React. A trava melhora a experiência, mas a garantia de
-não duplicação pertence ao servidor.
-
 ### Consulta
 
-Disponibilizar uma representação humana da operação:
+Disponibilizar uma representação humana da atividade:
 
 ```text
-GET /api/v1/admin/devices/{device_id}/operations/{operation_id}
-GET /api/v1/admin/devices/{device_id}/operations?limit=...
+GET /api/v1/admin/devices/{device_id}/activities/{activity_id}
+GET /api/v1/admin/devices/{device_id}/activities?limit=...
+DELETE /api/v1/admin/devices/{device_id}/activities/completed
 ```
 
 Ela deve trazer o estado, os campos de negócio sanitizados, as etapas e a
@@ -302,14 +309,14 @@ rotas HTTP.
 
 ### SSE
 
-Estender o stream já planejado/implementado para publicar
-`operation_updated` sempre que uma operação mudar de estado ou de contagem.
+O stream publica `activity_updated` sempre que uma atividade muda de estado
+ou de contagem e também quando recebe um bônus criado diretamente no agente.
 
 O fluxo normal do frontend passa a ser:
 
 1. criar a operação por HTTP;
 2. inserir ou atualizar uma única história na tela;
-3. receber `operation_updated` até a conclusão;
+3. receber `activity_updated` até a conclusão;
 4. reconciliar a listagem na reconexão do SSE.
 
 Remover o polling de dois segundos de `synchronizeBonus`. Se for mantida uma
@@ -327,7 +334,7 @@ O middleware administrativo deixa de gerar atividade humana para:
 - `GET device`;
 - `GET status`;
 - `GET commands/{operation_id}`;
-- `GET operations`;
+- `GET activities`;
 - `GET communication`;
 - conexão, keep-alive e reconexão do stream.
 
@@ -404,13 +411,12 @@ necessários ao suporte.
 - Fechar o vocabulário português e os códigos internos estáveis.
 - Criar testes de texto com exemplos reais antes dos componentes visuais.
 
-### Etapa 2 — persistência da operação
+### Etapa 2 — persistência da atividade
 
-- Criar a migração da projeção de operações e dos campos de tentativa.
+- Criar a migração da projeção de atividades e dos campos de tentativa.
 - Fazer criação e mudança de estado na mesma transação do comando/política.
 - Preservar operações em reinício do servidor.
 - Garantir idempotência por `operation_id`.
-- Persistir e validar a chave idempotente usada na criação.
 - Manter detalhes sensíveis fora da projeção e de seus eventos.
 
 ### Etapa 3 — instrumentação servidor–agente
@@ -422,12 +428,11 @@ necessários ao suporte.
 - Acrescentar resultado estruturado do agente em fase compatível posterior,
   caso seja necessário explicar falhas definitivas.
 
-### Etapa 4 — API e SSE de operações
+### Etapa 4 — API e SSE de atividades
 
 - Padronizar `operation_id` nas ações assíncronas.
-- Padronizar `Idempotency-Key` e o comportamento de repetição/conflito.
-- Criar endpoints de listagem e detalhe de operações.
-- Publicar `operation_updated` no SSE.
+- Criar endpoints de listagem, detalhe e limpeza de atividades.
+- Publicar `activity_updated` no SSE.
 - Reconciliar eventos perdidos após reconexão.
 - Compartilhar uma única conexão SSE entre estado e atividade.
 - Remover o polling frequente do bônus.
@@ -435,6 +440,7 @@ necessários ao suporte.
 ### Etapa 5 — experiência humana
 
 - Construir “Ações e resultados” com uma história por operação.
+- Mostrar também bônus criados diretamente no agente na mesma lista.
 - Implementar estados, linha do tempo e textos definidos neste plano.
 - Exibir tentativas somente no resumo final ou quando houver demora/reenvio.
 - Manter diagnóstico técnico separado e recolhido.
@@ -464,14 +470,11 @@ necessários ao suporte.
 4. Painel fechado durante a operação e reconstrução correta ao reabrir.
 5. SSE desconectado e reconciliação sem duplicar a história.
 6. Duas submissões reais de 15 minutos exibidas como duas operações.
-7. Clique ou reenvio HTTP com a mesma chave idempotente criando uma operação.
-8. Política concluída somente quando a revisão aplicada for observada.
-9. Falha/rejeição distinguida de simples espera.
-10. Servidor reiniciado com operação pendente.
-11. Agente antigo sem capacidade nova, com orientação compreensível.
-12. Nenhum segredo presente em operação, evento, SSE ou detalhe técnico.
-13. Clique duplo e reenvio HTTP com a mesma chave retornando a mesma operação.
-14. Reutilização da chave com minutos ou ação diferentes sendo rejeitada.
+7. Política concluída somente quando a revisão aplicada for observada.
+8. Falha/rejeição distinguida de simples espera.
+9. Servidor reiniciado com operação pendente.
+10. Agente antigo sem capacidade nova, com orientação compreensível.
+11. Nenhum segredo presente em operação, evento, SSE ou detalhe técnico.
 
 ## Migração do histórico existente
 

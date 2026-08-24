@@ -39,6 +39,17 @@ Debian, adiciona os metadados de `packaging/debian/` e chama `dpkg-deb`.
 
 ## Geração manual do servidor
 
+Para gerar, validar, enviar e publicar o servidor pelo fluxo assistido:
+
+```bash
+./scripts/publish-server.sh
+```
+
+O script apresenta o último artefato e sugere o próximo `~pilotN`. Para gerar
+sem publicar, use `./scripts/publish-server.sh --build-only`.
+
+Os comandos de baixo nível continuam disponíveis para automação:
+
 ```bash
 ./scripts/build-server-package.sh
 ./scripts/test-server-package.sh

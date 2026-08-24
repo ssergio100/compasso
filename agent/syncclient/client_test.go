@@ -39,6 +39,22 @@ func TestSynchronizationStatusTracksHeartbeatResult(t *testing.T) {
 	}
 }
 
+func TestSynchronizationReportKeepsTheLastSanitizedFailure(t *testing.T) {
+	client := &Client{}
+	client.setRemoteControl(false, false, false, 0)
+	client.reportStatus(errors.New("heartbeat returned HTTP 400"))
+	checked, online, detail := client.SynchronizationReport()
+	if !checked || online || detail != "heartbeat returned HTTP 400" {
+		t.Fatalf("offline report checked=%t online=%t detail=%q", checked, online, detail)
+	}
+	client.setRemoteControl(true, false, false, 1)
+	client.reportStatus(nil)
+	checked, online, detail = client.SynchronizationReport()
+	if !checked || !online || detail != "" {
+		t.Fatalf("online report checked=%t online=%t detail=%q", checked, online, detail)
+	}
+}
+
 func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

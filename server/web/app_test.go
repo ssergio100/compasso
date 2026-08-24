@@ -575,6 +575,44 @@ func TestHeartbeatRequiresDeviceCredential(t *testing.T) {
 	}
 }
 
+func TestRejectedHeartbeatExplainsTheFailureInHumanLanguage(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := fixture.store.IssueDeviceToken(context.Background(), device.ID, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      fixture.now.Format("2006-01-02"),
+		Events: []protocol.PendingEvent{{
+			UUID: "invalid-event", Kind: "unknown", Payload: json.RawMessage(`{}`), CreatedAt: fixture.now,
+		}},
+	})
+	request := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath, bytes.NewReader(payload))
+	request.Header.Set(deviceIDHeader, device.ID)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set(protocol.VersionHeader, protocol.CurrentProtocolVersion)
+	response := httptest.NewRecorder()
+	fixture.app.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("rejected heartbeat status=%d body=%s", response.Code, response.Body.String())
+	}
+	logs, err := fixture.store.ListCommunicationLogs(context.Background(), device.ID, 0, 10)
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("rejected heartbeat logs=%+v err=%v", logs, err)
+	}
+	want := "O servidor não reconheceu uma atividade pendente enviada pelo computador."
+	if logs[0].Summary != want || logs[0].Details["rejection_reason"] != want ||
+		logs[0].Details["failure_stage"] != "processamento_no_servidor" {
+		t.Fatalf("rejected heartbeat explanation=%+v", logs[0])
+	}
+}
+
 func TestAdministrativeCommunicationLogsCanBeConfiguredAndDeleted(t *testing.T) {
 	fixture := newWebFixture(t, false, time.Hour)
 	defer fixture.store.Close()
@@ -596,7 +634,7 @@ func TestAdministrativeCommunicationLogsCanBeConfiguredAndDeleted(t *testing.T) 
 		RetentionDays int                              `json:"retention_days"`
 	}
 	decodeResponse(t, response, &listing)
-	if len(listing.Events) != 1 || listing.Events[0].Source != "interface" || listing.RetentionDays != 30 {
+	if len(listing.Events) != 0 || listing.RetentionDays != 30 {
 		t.Fatalf("communication listing=%+v", listing)
 	}
 	response = fixture.requestJSON(http.MethodPut, devicePath+"/communication/settings", updateCommunicationRetentionRequest{RetentionDays: 7}, true)
@@ -654,6 +692,152 @@ func TestCommunicationLogIncludesBusinessDetails(t *testing.T) {
 	}
 	if command == nil || command.Details["command"] != "pause_monitoring" {
 		t.Fatalf("command log=%+v", command)
+	}
+}
+
+func TestAdministrativeActivitiesTellTheCommandLifecycle(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devicePath := "/api/v1/admin/devices/" + device.ID
+	bonusResponse := fixture.requestJSON(http.MethodPost, devicePath+"/bonus", addAdminBonusRequest{Minutes: 15}, true)
+	if bonusResponse.Code != http.StatusAccepted {
+		t.Fatalf("bonus status=%d body=%s", bonusResponse.Code, bonusResponse.Body.String())
+	}
+	var queued adminBonusResponse
+	decodeResponse(t, bonusResponse, &queued)
+
+	loadActivity := func() serverstorage.DeviceActivity {
+		response := fixture.requestJSON(http.MethodGet, devicePath+"/activities/"+queued.OperationID, nil, false)
+		if response.Code != http.StatusOK {
+			t.Fatalf("activity status=%d body=%s", response.Code, response.Body.String())
+		}
+		var activity serverstorage.DeviceActivity
+		decodeResponse(t, response, &activity)
+		return activity
+	}
+	step := func(activity serverstorage.DeviceActivity, kind string) *serverstorage.ActivityStep {
+		for index := range activity.Steps {
+			if activity.Steps[index].Kind == kind {
+				return &activity.Steps[index]
+			}
+		}
+		return nil
+	}
+
+	waiting := loadActivity()
+	if waiting.Status != "waiting_device" || step(waiting, "offered") != nil || waiting.Details["minutes"] != "15" {
+		t.Fatalf("waiting activity=%+v", waiting)
+	}
+	first, err := fixture.store.ReceiveHeartbeat(context.Background(), device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-10",
+	}, fixture.now.Add(time.Second))
+	if err != nil || len(first.Commands) != 1 {
+		t.Fatalf("first heartbeat=%+v err=%v", first, err)
+	}
+	offered := loadActivity()
+	if offered.Status != "offered" || step(offered, "offered") == nil || step(offered, "offered").Occurrences != 1 {
+		t.Fatalf("offered activity=%+v", offered)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(context.Background(), device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision + 1, LocalDate: "2026-08-10", CommandAcks: []string{queued.OperationID},
+	}, fixture.now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	completed := loadActivity()
+	if completed.Status != "completed" || completed.CompletedAt == nil || step(completed, "completed") == nil || step(completed, "offered").Occurrences != 1 {
+		t.Fatalf("completed activity=%+v", completed)
+	}
+
+	listingResponse := fixture.requestJSON(http.MethodGet, devicePath+"/activities?limit=10", nil, false)
+	var listing struct {
+		Activities []serverstorage.DeviceActivity `json:"activities"`
+	}
+	decodeResponse(t, listingResponse, &listing)
+	listedBonus := false
+	for _, activity := range listing.Activities {
+		listedBonus = listedBonus || activity.ID == queued.OperationID
+	}
+	if listingResponse.Code != http.StatusOK || !listedBonus {
+		t.Fatalf("activity listing status=%d value=%+v", listingResponse.Code, listing)
+	}
+
+	pendingResponse := fixture.requestJSON(http.MethodPost, devicePath+"/commands", queueAdminCommandRequest{Command: "pause_monitoring"}, true)
+	if pendingResponse.Code != http.StatusAccepted {
+		t.Fatalf("pending command status=%d body=%s", pendingResponse.Code, pendingResponse.Body.String())
+	}
+	var pending struct {
+		OperationID string `json:"operation_id"`
+	}
+	decodeResponse(t, pendingResponse, &pending)
+
+	withoutCSRF := fixture.requestJSON(http.MethodDelete, devicePath+"/activities/completed", nil, false)
+	if withoutCSRF.Code != http.StatusForbidden {
+		t.Fatalf("completed cleanup without CSRF status=%d", withoutCSRF.Code)
+	}
+	cleanupResponse := fixture.requestJSON(http.MethodDelete, devicePath+"/activities/completed", nil, true)
+	var cleanup struct {
+		Deleted int64 `json:"deleted"`
+	}
+	decodeResponse(t, cleanupResponse, &cleanup)
+	if cleanupResponse.Code != http.StatusOK || cleanup.Deleted != 2 {
+		t.Fatalf("completed cleanup status=%d value=%+v", cleanupResponse.Code, cleanup)
+	}
+	if response := fixture.requestJSON(http.MethodGet, devicePath+"/activities/"+queued.OperationID, nil, false); response.Code != http.StatusNotFound {
+		t.Fatalf("completed activity remained after cleanup: status=%d", response.Code)
+	}
+	if acknowledged, err := fixture.store.RemoteBonusAcknowledged(context.Background(), device.ID, queued.OperationID); err != nil || !acknowledged {
+		t.Fatalf("history cleanup changed the real bonus command: acknowledged=%t err=%v", acknowledged, err)
+	}
+	if response := fixture.requestJSON(http.MethodGet, devicePath+"/activities/"+pending.OperationID, nil, false); response.Code != http.StatusOK {
+		t.Fatalf("pending activity removed by cleanup: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestLocalAgentBonusAppearsInAdministrativeActivities(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(protocol.BonusPayload{
+		LocalDate: "2026-08-10", Seconds: 30 * 60, Origin: "local",
+	})
+	if _, err := fixture.store.ReceiveHeartbeat(context.Background(), device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      "2026-08-10",
+		Events: []protocol.PendingEvent{{
+			UUID: "local-bonus-web-30m", Kind: "bonus_added", Payload: payload, CreatedAt: fixture.now,
+		}},
+	}, fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	response := fixture.requestJSON(http.MethodGet,
+		"/api/v1/admin/devices/"+device.ID+"/activities?limit=10", nil, false)
+	var listing struct {
+		Activities []serverstorage.DeviceActivity `json:"activities"`
+	}
+	decodeResponse(t, response, &listing)
+	if response.Code != http.StatusOK {
+		t.Fatalf("activities status=%d value=%+v", response.Code, listing)
+	}
+	var activity serverstorage.DeviceActivity
+	for _, candidate := range listing.Activities {
+		if candidate.ID == "local-bonus-web-30m" {
+			activity = candidate
+			break
+		}
+	}
+	if activity.ID != "local-bonus-web-30m" || activity.Origin != "device" ||
+		activity.Status != "completed" || activity.Details["minutes"] != "30" {
+		t.Fatalf("local activity=%+v", activity)
 	}
 }
 

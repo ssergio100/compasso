@@ -18,6 +18,12 @@ que o servidor aceitar o primeiro heartbeat.
 O aplicativo **Compasso** abre a concessão local de tempo. A engrenagem no canto
 inferior direito abre novamente a configuração de servidor e credenciais.
 
+A própria janela mostra o estado da comunicação. Quando houver falha, ela
+explica em linguagem direta se o servidor recusou a sincronização, se a
+credencial precisa ser revista, se o agente exige atualização ou se houve uma
+indisponibilidade de rede. A mensagem técnica bruta e o token nunca são
+exibidos.
+
 O agente roda como serviço systemd e continua aplicando a última autorização
 válida durante interrupções de rede:
 

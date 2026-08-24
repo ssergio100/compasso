@@ -94,6 +94,9 @@ func (a *App) logAdministrativeCommunication(next http.Handler) http.Handler {
 			Details: details,
 		}, a.now())
 		a.publishCommunicationLog(deviceID, stored)
+		if r.Method != http.MethodGet && status >= http.StatusOK && status < http.StatusMultipleChoices {
+			a.publishActivitiesChanged(deviceID)
+		}
 	})
 }
 
@@ -111,7 +114,12 @@ func administrativeCommunication(r *http.Request) (deviceID, operation, route st
 	if len(parts) > 1 {
 		resource = parts[1]
 	}
-	if resource == "communication" || resource == "stream" {
+	if resource == "communication" || resource == "stream" || resource == "activities" {
+		return "", "", "", false
+	}
+	// Automatic reads support screen hydration and activity tracking. They are
+	// not human actions and would otherwise drown the useful history in polling.
+	if r.Method == http.MethodGet && (resource == "device" || resource == "status" || resource == "commands" || resource == "events") {
 		return "", "", "", false
 	}
 	operation = r.Method + " " + resource

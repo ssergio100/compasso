@@ -12,8 +12,8 @@ Essa mudança atende exclusivamente:
 - `server/web`: novo endpoint SSE e um hub de publicação de eventos;
 - `docs/prototypes/admin-ui-rhythm`: consumidor do stream no painel vigente.
 
-Não altera o protocolo de heartbeat do agente (`protocol/v1`), o agente, a
-`local-ui`, nem a interface legada `admin-ui`.
+Não altera o protocolo de heartbeat do agente (`protocol/v1`), o agente nem a
+`local-ui`.
 
 ## Decisão de tecnologia
 
@@ -293,6 +293,5 @@ origens diferentes.
 - WebSocket ou comunicação bidirecional;
 - Atualização em tempo real da listagem de dispositivos, que permanece sob
   demanda;
-- Alterações em `local-ui`, na interface legada `admin-ui` ou em outros
-  protótipos em `docs/prototypes`;
+- Alterações em `local-ui`;
 - Escolha de framework para o frontend.

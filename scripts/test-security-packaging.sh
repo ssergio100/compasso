@@ -5,7 +5,8 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 systemd_unit="${project_root}/packaging/systemd/tempo-agent.service"
 agent_configuration_helper="${project_root}/agent/cmd/tempo-agent-configure/main.go"
 dockerfile="${project_root}/server/Dockerfile"
-admin_dockerfile="${project_root}/admin-ui/Dockerfile"
+admin_compose="${project_root}/deploy/admin-ui/compose.yml"
+admin_nginx="${project_root}/deploy/admin-ui/default.conf"
 dockerignore="${project_root}/.dockerignore"
 
 require_unit_directive() {
@@ -48,20 +49,21 @@ bash -n "${project_root}/packaging/debian/prerm"
 bash -n "${project_root}/packaging/debian/postrm"
 grep -Fq '"restart", "tempo-agent.service"' "${agent_configuration_helper}"
 grep -Fq 'waitForSuccessfulSynchronization' "${agent_configuration_helper}"
+grep -Fq 'send_member="GetSynchronizationReport"' "${project_root}/packaging/dbus/br.com.tempo.Agent.conf"
 bash -n "${project_root}/scripts/install-server.sh"
 bash -n "${project_root}/scripts/backup-server.sh"
 bash -n "${project_root}/scripts/restore-server-backup.sh"
 bash -n "${project_root}/scripts/update-server.sh"
+bash -n "${project_root}/scripts/publish-server.sh"
 grep -Fqx 'USER tempo-server:tempo-server' "${dockerfile}"
 if grep -Eq 'server/web/(templates|static)' "${dockerfile}"; then
   echo "erro: imagem da API ainda copia o frontend" >&2
   exit 1
 fi
-grep -Fqx 'USER nginx:nginx' "${admin_dockerfile}"
-if grep -Eq 'COPY .*server|tempo-server|go build' "${admin_dockerfile}"; then
-  echo "erro: imagem do frontend contém referência ao backend" >&2
-  exit 1
-fi
+grep -Fq 'image: nginx:alpine' "${admin_compose}"
+grep -Fq '/srv/sites/compasso-admin-ui:/usr/share/nginx/html:ro' "${admin_compose}"
+grep -Fq 'X-Content-Type-Options "nosniff"' "${admin_nginx}"
+grep -Fq 'X-Frame-Options "DENY"' "${admin_nginx}"
 grep -Fqx '**/config.toml' "${dockerignore}"
 grep -Fqx 'secrets' "${dockerignore}"
 if command -v docker >/dev/null 2>&1; then

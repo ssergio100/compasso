@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -29,6 +30,10 @@ type synchronizationSource interface {
 	SynchronizationStatus() (checked, online bool)
 }
 
+type synchronizationReportSource interface {
+	SynchronizationReport() (checked, online bool, detail string)
+}
+
 func newBonusAPI(service *localauth.Service, synchronization synchronizationSource) (*bonusAPI, error) {
 	if service == nil {
 		return nil, errors.New("local bonus service is required")
@@ -50,6 +55,46 @@ func (a *bonusAPI) GetSynchronizationStatus() (string, *dbus.Error) {
 		return "online", nil
 	}
 	return "offline", nil
+}
+
+// GetSynchronizationReport is the human-facing, additive successor to
+// GetSynchronizationStatus. The old method remains available to clients from
+// older packages, while new interfaces receive an actionable explanation.
+func (a *bonusAPI) GetSynchronizationReport() (string, string, *dbus.Error) {
+	checked, online := a.synchronization.SynchronizationStatus()
+	detail := ""
+	if source, ok := a.synchronization.(synchronizationReportSource); ok {
+		checked, online, detail = source.SynchronizationReport()
+	}
+	if !checked {
+		return "checking", "Aguardando a primeira resposta do servidor.", nil
+	}
+	if online {
+		return "online", "", nil
+	}
+	return "offline", humanSynchronizationDetail(detail), nil
+}
+
+func humanSynchronizationDetail(detail string) string {
+	lower := strings.ToLower(detail)
+	switch {
+	case strings.Contains(lower, "http 400"):
+		return "O servidor recusou a sincronização (erro 400). O agente e o servidor podem estar em versões incompatíveis."
+	case strings.Contains(lower, "http 401"), strings.Contains(lower, "http 403"):
+		return "O servidor recusou a identificação deste computador. Revise o dispositivo e o token nas configurações."
+	case strings.Contains(lower, "local revision"), strings.Contains(lower, "http 409"):
+		return "O estado deste computador não corresponde ao cadastro atual do servidor. Revise a configuração do dispositivo."
+	case strings.Contains(lower, "update the compasso agent"), strings.Contains(lower, "http 426"):
+		return "Este agente precisa ser atualizado para continuar a comunicação com o servidor."
+	case strings.Contains(lower, "http 502"), strings.Contains(lower, "http 503"), strings.Contains(lower, "http 504"):
+		return "O servidor está temporariamente indisponível. O agente continuará tentando automaticamente."
+	case strings.Contains(lower, "lookup "), strings.Contains(lower, "no such host"), strings.Contains(lower, "server misbehaving"):
+		return "Não foi possível localizar o servidor na rede. Verifique a conexão e o endereço configurado."
+	case strings.Contains(lower, "deadline exceeded"), strings.Contains(lower, "timeout"):
+		return "O servidor demorou demais para responder. O agente continuará tentando automaticamente."
+	default:
+		return "A sincronização falhou. Abra as configurações do Compasso para revisar a comunicação."
+	}
 }
 
 // AddLocalBonus is called by the unprivileged GTK dialog. The password is
@@ -107,6 +152,12 @@ func ExportSystem(service *localauth.Service, synchronization synchronizationSou
 				Name: "GetSynchronizationStatus",
 				Args: []introspect.Arg{
 					{Name: "status", Type: "s", Direction: "out"},
+				},
+			}, {
+				Name: "GetSynchronizationReport",
+				Args: []introspect.Arg{
+					{Name: "status", Type: "s", Direction: "out"},
+					{Name: "detail", Type: "s", Direction: "out"},
 				},
 			}},
 		}, introspect.IntrospectData},

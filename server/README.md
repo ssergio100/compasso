@@ -2,7 +2,7 @@
 
 O `tempo-server` oferece somente a API JSON de administração e sincronização.
 Ele não lê, renderiza nem serve a interface web. O painel independente vive em
-`admin-ui/` e recebe a URL da API em runtime.
+`docs/prototypes/admin-ui-rhythm/` e recebe a URL da API em runtime.
 
 ## Desenvolvimento
 
@@ -22,10 +22,12 @@ Em produção, `secure_cookies` deve ser `true`. O SQLite definido por
 
 ## Produção com Docker
 
-O `compose.yaml` executa API e frontend em imagens independentes, como usuários
-sem privilégios, com capabilities removidas e filesystem somente leitura. Bind,
-portas, origem administrativa, URL pública da API e cookies seguros são
-configurados por `.env`, sem dependência de um produto de exposição específico.
+O `compose.yaml` executa somente a API, como usuário sem privilégios, com
+capabilities removidas e filesystem somente leitura. A interface é compilada
+separadamente e servida pelo contêiner descrito em `deploy/admin-ui/compose.yml`,
+com o build montado em modo somente leitura. Bind, portas, origem
+administrativa, URL pública da API e cookies seguros são configurados sem
+dependência de um produto de exposição específico.
 
 Cloudflare Tunnel, proxy reverso, VPN, acesso somente por LAN ou qualquer outra
 forma de exposição são decisões externas ao servidor Compasso.

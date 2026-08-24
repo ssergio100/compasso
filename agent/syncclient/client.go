@@ -59,6 +59,7 @@ type Client struct {
 	controlPaused          bool
 	controlBlocked         bool
 	controlRevision        int64
+	synchronizationDetail  string
 	statusReporter         func(error)
 }
 
@@ -76,6 +77,14 @@ func (c *Client) SynchronizationStatus() (checked, online bool) {
 	return c.controlChecked, c.controlOnline
 }
 
+// SynchronizationReport adds the last sanitized failure to the live state so
+// the local interface can explain why the server is unavailable.
+func (c *Client) SynchronizationReport() (checked, online bool, detail string) {
+	c.controlMu.RLock()
+	defer c.controlMu.RUnlock()
+	return c.controlChecked, c.controlOnline, c.synchronizationDetail
+}
+
 func (c *Client) setRemoteControl(online, paused, blocked bool, revision int64) {
 	c.controlMu.Lock()
 	c.controlChecked = true
@@ -91,6 +100,13 @@ func (c *Client) SetStatusReporter(reporter func(error)) {
 }
 
 func (c *Client) reportStatus(err error) {
+	c.controlMu.Lock()
+	if err == nil {
+		c.synchronizationDetail = ""
+	} else {
+		c.synchronizationDetail = err.Error()
+	}
+	c.controlMu.Unlock()
 	if c.statusReporter != nil {
 		c.statusReporter(err)
 	}

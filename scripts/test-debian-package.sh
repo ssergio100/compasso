@@ -111,9 +111,11 @@ for relative_binary_path in "${binary_paths[@]}"; do
 done
 
 required_package_paths=(
+  usr/bin/tempo-local-bonus
   usr/bin/compasso-agent-setup
   usr/share/applications/br.com.compasso.Compasso.desktop
   etc/xdg/autostart/br.com.compasso.AgentSetup.desktop
+  usr/share/dbus-1/system.d/br.com.tempo.Agent.conf
   usr/share/polkit-1/actions/br.com.compasso.AgentSetup.policy
   usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml
 )
@@ -123,6 +125,15 @@ for required_package_path in "${required_package_paths[@]}"; do
     exit 1
   fi
 done
+
+if ! grep -Fq 'GetSynchronizationReport' "${temporary_directory}/root/usr/bin/tempo-local-bonus"; then
+  echo "erro: interface local não consulta o diagnóstico de sincronização" >&2
+  exit 1
+fi
+if ! grep -Fq 'send_member="GetSynchronizationReport"' "${temporary_directory}/root/usr/share/dbus-1/system.d/br.com.tempo.Agent.conf"; then
+  echo "erro: pacote não expõe o diagnóstico humano de sincronização" >&2
+  exit 1
+fi
 
 configuration_path="${temporary_directory}/root/etc/tempo-agent/config.toml"
 if [[ "$(stat -c '%a' "${configuration_path}")" != "600" ]]; then

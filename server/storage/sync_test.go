@@ -119,14 +119,119 @@ func TestCommandsRemainPendingUntilAcknowledged(t *testing.T) {
 	if err != nil || len(first.Commands) != 1 || first.Commands[0].Kind != "add_bonus" {
 		t.Fatalf("pending commands=%+v err=%v", first.Commands, err)
 	}
+	activity, err := store.LoadDeviceActivity(ctx, device.ID, first.Commands[0].ID)
+	offered := findActivityStep(activity.Steps, "offered")
+	if err != nil || activity.Status != "offered" || offered == nil || offered.Occurrences != 1 {
+		t.Fatalf("first delivery activity=%+v err=%v", activity, err)
+	}
 	second, err := store.ReceiveHeartbeat(ctx, device.ID, request, now.Add(2*time.Second))
 	if err != nil || len(second.Commands) != 1 {
 		t.Fatalf("unacknowledged command was not redelivered: %+v err=%v", second.Commands, err)
+	}
+	activity, err = store.LoadDeviceActivity(ctx, device.ID, first.Commands[0].ID)
+	offered = findActivityStep(activity.Steps, "offered")
+	if err != nil || offered == nil || offered.Occurrences != 2 {
+		t.Fatalf("second delivery activity=%+v err=%v", activity, err)
 	}
 	request.CommandAcks = []string{first.Commands[0].ID}
 	third, err := store.ReceiveHeartbeat(ctx, device.ID, request, now.Add(3*time.Second))
 	if err != nil || len(third.Commands) != 0 {
 		t.Fatalf("acknowledged command still pending: %+v err=%v", third.Commands, err)
+	}
+	activity, err = store.LoadDeviceActivity(ctx, device.ID, first.Commands[0].ID)
+	offered = findActivityStep(activity.Steps, "offered")
+	if err != nil || activity.Status != "completed" || activity.CompletedAt == nil || offered == nil || offered.Occurrences != 2 || findActivityStep(activity.Steps, "completed") == nil {
+		t.Fatalf("completed activity=%+v err=%v", activity, err)
+	}
+}
+
+func TestUnknownHistoricalCommandAcknowledgementIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 24, 3, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      "2026-08-24",
+		CommandAcks:    []string{"historical-command-no-longer-on-server"},
+	}, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("historical acknowledgement rejected the heartbeat: %v", err)
+	}
+	if len(response.Commands) != 0 {
+		t.Fatalf("unexpected commands after historical acknowledgement: %+v", response.Commands)
+	}
+}
+
+func TestAcknowledgementRemainsHarmlessAfterHumanHistoryExpires(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 24, 3, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandID, err := store.QueueControlOperation(ctx, device.ID, "pause_monitoring", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      "2026-08-24",
+		CommandAcks:    []string{commandID},
+	}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := store.CleanupExpiredCompletedActivities(
+		ctx, now.AddDate(0, 0, completedActivityRetentionDays+1),
+	); err != nil || deleted != 2 {
+		t.Fatalf("expired activity cleanup deleted=%d err=%v", deleted, err)
+	}
+	if _, err := store.LoadDeviceActivity(ctx, device.ID, commandID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired activity remained visible: %v", err)
+	}
+
+	if _, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      "2026-09-24",
+		CommandAcks:    []string{commandID},
+	}, now.AddDate(0, 0, completedActivityRetentionDays+1).Add(time.Second)); err != nil {
+		t.Fatalf("acknowledgement for command with expired activity rejected heartbeat: %v", err)
+	}
+}
+
+func TestPendingCommandDeliveryDoesNotDependOnHumanHistory(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 24, 3, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Zorin", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandID, err := store.QueueRemoteBonus(ctx, device.ID, 15*60, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM activity WHERE id=?`, commandID); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      "2026-08-24",
+	}, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("missing human history rejected command delivery: %v", err)
+	}
+	if len(response.Commands) != 1 || response.Commands[0].ID != commandID {
+		t.Fatalf("pending command was not delivered: %+v", response.Commands)
 	}
 }
 

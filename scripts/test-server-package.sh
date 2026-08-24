@@ -2,13 +2,18 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-package_version="$(sed -n 's/^Version: //p' "${project_root}/packaging/debian/control")"
-package_path="${1:-${project_root}/dist/compasso-server_${package_version}_all.deb}"
+package_path="${1:-}"
+if [[ -z "${package_path}" ]]; then
+  latest_line="$(find "${project_root}/dist" -maxdepth 1 -type f \
+    -name 'compasso-server_*_all.deb' -printf '%T@\t%p\n' 2>/dev/null | \
+    sort -nr | sed -n '1p')"
+  package_path="${latest_line#*$'\t'}"
+fi
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "${temporary_directory}"' EXIT
 
 if [[ ! -f "${package_path}" ]]; then
-  echo "erro: pacote ausente: ${package_path}" >&2
+  echo "erro: nenhum pacote do servidor foi encontrado; informe o caminho do .deb" >&2
   exit 1
 fi
 if [[ "$(dpkg-deb --field "${package_path}" Package)" != "compasso-server" ]]; then
@@ -17,6 +22,11 @@ if [[ "$(dpkg-deb --field "${package_path}" Package)" != "compasso-server" ]]; t
 fi
 if [[ "$(dpkg-deb --field "${package_path}" Architecture)" != "all" ]]; then
   echo "erro: pacote do servidor deve ser independente de arquitetura" >&2
+  exit 1
+fi
+package_version="$(dpkg-deb --field "${package_path}" Version)"
+if [[ -z "${package_version}" ]] || ! dpkg --validate-version "${package_version}"; then
+  echo "erro: versão inválida nos metadados do pacote" >&2
   exit 1
 fi
 
@@ -59,4 +69,4 @@ COMPASSO_DATA_DIRECTORY="${temporary_directory}/data" \
 test ! -e "${package_root}/admin-ui"
 bash -n "${package_root}"/scripts/*.sh
 
-echo "pacote Debian do servidor validado"
+echo "pacote Debian do servidor validado: $(basename "${package_path}") (${package_version})"

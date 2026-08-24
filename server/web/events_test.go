@@ -66,6 +66,34 @@ func TestDeviceStreamRequiresAdministrativeSession(t *testing.T) {
 	}
 }
 
+func TestSuccessfulAdministrativeMutationRequestsDurableActivityReload(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, unsubscribe := fixture.app.hub.subscribe(device.ID)
+	defer unsubscribe()
+	response := fixture.requestJSON(http.MethodPost,
+		"/api/v1/admin/devices/"+device.ID+"/commands",
+		queueAdminCommandRequest{Command: "pause_monitoring"}, true)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("pause status=%d body=%s", response.Code, response.Body.String())
+	}
+	foundReload := false
+	for index := 0; index < 3; index++ {
+		event := <-events
+		if event.Name == "activities_changed" {
+			foundReload = true
+		}
+	}
+	if !foundReload {
+		t.Fatal("successful mutation did not request an activity reload")
+	}
+}
+
 func TestDeviceStreamSendsHelloAndHeartbeatUpdates(t *testing.T) {
 	fixture := newWebFixture(t, false, time.Hour)
 	defer fixture.store.Close()
@@ -109,8 +137,19 @@ func TestDeviceStreamSendsHelloAndHeartbeatUpdates(t *testing.T) {
 	if err := fixture.store.SaveQuotas(context.Background(), device.ID, quotas, 10, fixture.now); err != nil {
 		t.Fatal(err)
 	}
+	operationID, err := fixture.store.QueueRemoteBonus(context.Background(), device.ID, 15*60, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localBonusPayload, _ := json.Marshal(protocol.BonusPayload{
+		LocalDate: fixture.now.Format("2006-01-02"), Seconds: 30 * 60, Origin: "local",
+	})
 	heartbeatBody, _ := json.Marshal(protocol.HeartbeatRequest{
 		PolicyRevision: 1, LocalDate: fixture.now.Format("2006-01-02"), SecondsUsed: 60,
+		Events: []protocol.PendingEvent{{
+			UUID: "local-bonus-sse-30m", Kind: "bonus_added",
+			Payload: localBonusPayload, CreatedAt: fixture.now,
+		}},
 	})
 	heartbeatRequest, err := http.NewRequest(http.MethodPost, server.URL+protocol.HeartbeatPath, bytes.NewReader(heartbeatBody))
 	if err != nil {
@@ -137,6 +176,31 @@ func TestDeviceStreamSendsHelloAndHeartbeatUpdates(t *testing.T) {
 	}
 	if !updated.Online || updated.UsedSeconds != 60 {
 		t.Fatalf("heartbeat status=%+v", updated)
+	}
+	activityEvent := readSSEEvent(t, reader)
+	if activityEvent.name != "activity_updated" {
+		t.Fatalf("after command delivery expected activity event, got %q", activityEvent.name)
+	}
+	var activity storage.DeviceActivity
+	if err := json.Unmarshal(activityEvent.data, &activity); err != nil {
+		t.Fatalf("activity payload=%s err=%v", activityEvent.data, err)
+	}
+	if activity.ID != operationID || activity.Status != "offered" ||
+		len(activity.Steps) != 3 || activity.Steps[2].Kind != "offered" || activity.Steps[2].Occurrences != 1 {
+		t.Fatalf("activity update=%+v", activity)
+	}
+
+	localActivityEvent := readSSEEvent(t, reader)
+	if localActivityEvent.name != "activity_updated" {
+		t.Fatalf("after local bonus expected activity event, got %q", localActivityEvent.name)
+	}
+	var localActivity storage.DeviceActivity
+	if err := json.Unmarshal(localActivityEvent.data, &localActivity); err != nil {
+		t.Fatalf("local activity payload=%s err=%v", localActivityEvent.data, err)
+	}
+	if localActivity.ID != "local-bonus-sse-30m" || localActivity.Origin != "device" ||
+		localActivity.Status != "completed" || localActivity.Details["minutes"] != "30" {
+		t.Fatalf("local activity update=%+v", localActivity)
 	}
 
 	communicationEvent := readSSEEvent(t, reader)

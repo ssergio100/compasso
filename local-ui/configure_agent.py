@@ -25,12 +25,42 @@ OBJECT_PATH = "/br/com/tempo/Agent"
 INTERFACE_NAME = "br.com.tempo.Agent"
 
 
-def synchronization_status_text(state):
-    return {
-        "online": "● Servidor online",
-        "offline": "○ Servidor sem comunicação",
-        "checking": "◌ Aguardando primeira comunicação com o servidor…",
-    }.get(state, "○ Estado de comunicação desconhecido")
+def synchronization_status_text(state, detail=""):
+    if state == "online":
+        return "● Servidor conectado"
+    if state == "checking":
+        return "◌ Aguardando a primeira resposta do servidor…"
+    if state == "offline":
+        explanation = detail or (
+            "A comunicação falhou. Revise o endereço, o dispositivo e o token."
+        )
+        return f"⚠ Servidor sem comunicação\n{explanation}"
+    return "○ Estado de comunicação desconhecido"
+
+
+def synchronization_report(proxy):
+    """Read the detailed report and remain compatible with older agents."""
+    try:
+        result = proxy.call_sync(
+            "GetSynchronizationReport",
+            None,
+            Gio.DBusCallFlags.NONE,
+            1000,
+            None,
+        )
+        return result.unpack()
+    except GLib.Error as error:
+        remote_name = Gio.DBusError.get_remote_error(error) or ""
+        if not remote_name.endswith("UnknownMethod"):
+            raise
+    result = proxy.call_sync(
+        "GetSynchronizationStatus",
+        None,
+        Gio.DBusCallFlags.NONE,
+        1000,
+        None,
+    )
+    return result.unpack()[0], ""
 
 
 def available_controlled_users():
@@ -254,15 +284,9 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
                     INTERFACE_NAME,
                     None,
                 )
-            result = self.status_proxy.call_sync(
-                "GetSynchronizationStatus",
-                None,
-                Gio.DBusCallFlags.NONE,
-                1000,
-                None,
-            )
+            state, detail = synchronization_report(self.status_proxy)
             self.server_connection_status.set_text(
-                synchronization_status_text(result.unpack()[0])
+                synchronization_status_text(state, detail)
             )
         except GLib.Error:
             self.status_proxy = None

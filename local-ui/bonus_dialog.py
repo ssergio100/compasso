@@ -45,6 +45,43 @@ def unavailable_service_message(setup_complete):
     )
 
 
+def synchronization_status_text(state, detail=""):
+    if state == "online":
+        return "● Servidor conectado"
+    if state == "checking":
+        return "◌ Aguardando a primeira resposta do servidor…"
+    explanation = detail or (
+        "A comunicação com o servidor falhou. "
+        "Abra a engrenagem para revisar a configuração."
+    )
+    return f"⚠ Servidor sem comunicação\n{explanation}"
+
+
+def synchronization_report(proxy):
+    """Read the detailed report and fall back to agents from older packages."""
+    try:
+        result = proxy.call_sync(
+            "GetSynchronizationReport",
+            None,
+            Gio.DBusCallFlags.NONE,
+            1000,
+            None,
+        )
+        return result.unpack()
+    except GLib.Error as error:
+        remote_name = Gio.DBusError.get_remote_error(error) or ""
+        if not remote_name.endswith("UnknownMethod"):
+            raise
+    result = proxy.call_sync(
+        "GetSynchronizationStatus",
+        None,
+        Gio.DBusCallFlags.NONE,
+        1000,
+        None,
+    )
+    return result.unpack()[0], ""
+
+
 def friendly_error(error):
     remote_name = Gio.DBusError.get_remote_error(error) or ""
     return friendly_error_name(remote_name)
@@ -66,9 +103,10 @@ def friendly_error_name(remote_name):
 class BonusWindow(Gtk.ApplicationWindow):
     def __init__(self, application):
         super().__init__(application=application, title="Compasso — Adicionar tempo")
-        self.set_default_size(420, 260)
+        self.set_default_size(420, 320)
         self.set_resizable(False)
         self.proxy = None
+        self.busy = False
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         content.set_margin_top(24)
@@ -86,6 +124,13 @@ class BonusWindow(Gtk.ApplicationWindow):
         description.set_wrap(True)
         description.set_halign(Gtk.Align.START)
         content.append(description)
+
+        self.connection_status = Gtk.Label(
+            label=synchronization_status_text("checking")
+        )
+        self.connection_status.set_wrap(True)
+        self.connection_status.set_halign(Gtk.Align.START)
+        content.append(self.connection_status)
 
         self.duration = Gtk.DropDown.new_from_strings(
             [f"{minutes} minutos" for minutes in BONUS_OPTIONS]
@@ -132,15 +177,45 @@ class BonusWindow(Gtk.ApplicationWindow):
             )
             if self.proxy.get_name_owner() is None:
                 self.proxy = None
+                self.connection_status.set_text("○ Serviço do agente indisponível")
                 self.status.set_text(
                     unavailable_service_message(os.path.exists(SETUP_MARKER_PATH))
                 )
                 self.submit.set_sensitive(False)
         except GLib.Error:
+            self.connection_status.set_text("○ Serviço do agente indisponível")
             self.status.set_text(
                 unavailable_service_message(os.path.exists(SETUP_MARKER_PATH))
             )
             self.submit.set_sensitive(False)
+        GLib.idle_add(self._refresh_server_status)
+        GLib.timeout_add_seconds(2, self._refresh_server_status)
+
+    def _refresh_server_status(self):
+        try:
+            if self.proxy is None:
+                self.proxy = Gio.DBusProxy.new_for_bus_sync(
+                    Gio.BusType.SYSTEM,
+                    Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES,
+                    None,
+                    BUS_NAME,
+                    OBJECT_PATH,
+                    INTERFACE_NAME,
+                    None,
+                )
+            if self.proxy.get_name_owner() is None:
+                raise RuntimeError("agent service has no D-Bus owner")
+            state, detail = synchronization_report(self.proxy)
+            self.connection_status.set_text(
+                synchronization_status_text(state, detail)
+            )
+            if not self.busy:
+                self.submit.set_sensitive(True)
+        except (GLib.Error, RuntimeError):
+            self.proxy = None
+            self.connection_status.set_text("○ Serviço do agente indisponível")
+            self.submit.set_sensitive(False)
+        return GLib.SOURCE_CONTINUE
 
     def _open_settings(self, _button):
         if not open_settings():
@@ -159,6 +234,7 @@ class BonusWindow(Gtk.ApplicationWindow):
             self.status.set_text("Escolha um período válido.")
             return
 
+        self.busy = True
         self.submit.set_sensitive(False)
         self.status.set_text("Verificando…")
         self.proxy.call(
@@ -172,6 +248,7 @@ class BonusWindow(Gtk.ApplicationWindow):
         )
 
     def _completed(self, proxy, result, seconds):
+        self.busy = False
         self.password.set_text("")
         self.submit.set_sensitive(True)
         try:

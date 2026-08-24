@@ -278,7 +278,12 @@ func (s *Store) RenameDevice(ctx context.Context, id, name string, now time.Time
 	if name == "" || len(name) > 80 {
 		return errors.New("device name must contain at most 80 characters")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE device SET name=?, updated_at=? WHERE id=?`, name, formatTime(now), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE device SET name=?, updated_at=? WHERE id=?`, name, formatTime(now), id)
 	if err != nil {
 		return err
 	}
@@ -286,7 +291,10 @@ func (s *Store) RenameDevice(ctx context.Context, id, name string, now time.Time
 	if changed == 0 {
 		return ErrNotFound
 	}
-	return s.InsertAudit(ctx, id, "device_renamed", map[string]interface{}{"name": name}, now)
+	if err := insertAudit(ctx, tx, id, "device_renamed", map[string]interface{}{"name": name}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteDevice(ctx context.Context, id string) error {
@@ -397,8 +405,12 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 	if err != nil {
 		return "", err
 	}
+	action := "updated"
+	if isNew {
+		action = "created"
+	}
 	if err := insertAudit(ctx, tx, deviceID, "routine_saved", map[string]interface{}{
-		"routine_id": routine.ID, "name": routine.Name, "revision": revision,
+		"routine_id": routine.ID, "name": routine.Name, "revision": revision, "action": action,
 	}, now); err != nil {
 		return "", err
 	}
@@ -490,6 +502,12 @@ func (s *Store) DeleteRoutine(ctx context.Context, deviceID, routineID string, n
 		return err
 	}
 	defer tx.Rollback()
+	var routineName string
+	if err := tx.QueryRowContext(ctx, `SELECT name FROM routine WHERE id=? AND device_id=?`, routineID, deviceID).Scan(&routineName); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM routine WHERE id=? AND device_id=?`, routineID, deviceID)
 	if err != nil {
 		return err
@@ -501,7 +519,7 @@ func (s *Store) DeleteRoutine(ctx context.Context, deviceID, routineID string, n
 	if _, err := bumpPolicyKeepWarning(ctx, tx, deviceID, now); err != nil {
 		return err
 	}
-	if err := insertAudit(ctx, tx, deviceID, "routine_deleted", map[string]interface{}{"routine_id": routineID}, now); err != nil {
+	if err := insertAudit(ctx, tx, deviceID, "routine_deleted", map[string]interface{}{"routine_id": routineID, "name": routineName}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -680,7 +698,13 @@ func insertAudit(ctx context.Context, executor execer, deviceID, kind string, pa
 	_, err = executor.ExecContext(ctx, `
 		INSERT INTO audit_event(uuid, device_id, kind, origin, payload_json, created_at)
 		VALUES (?, ?, ?, 'web', ?, ?)`, id, deviceID, kind, string(encoded), formatTime(now))
-	return err
+	if err != nil {
+		return err
+	}
+	if completedAdminAuditKind(kind) {
+		return insertCompletedAdminActivity(ctx, executor, id, deviceID, kind, humanActivityDetails(kind, encoded), now)
+	}
+	return nil
 }
 
 func bumpPolicy(ctx context.Context, tx *sql.Tx, deviceID string, warningMinutes int, now time.Time) (int64, error) {

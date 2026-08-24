@@ -1,16 +1,16 @@
 import { Activity, AlertTriangle, CalendarDays, Check, ChevronDown, Clock3, Copy, KeyRound, Laptop, LockKeyhole, LogOut, Monitor, MonitorCheck, Pause, Play, Plus, RefreshCw, Save, Settings, ShieldCheck, ShieldOff, SlidersHorizontal, SquareTerminal, Trash2, UnlockKeyhole, UserRoundCheck, X } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, remoteMode } from "./api";
 import { Brand, Modal, TimePicker, Toast } from "./components";
 import { CommunicationPage } from "./communication/CommunicationPage";
 import { mockDevices } from "./mock";
-import type { Device, LiveStatus, Routine, View } from "./types";
+import type { CommunicationLog, Device, DeviceActivity, LiveStatus, LiveStreamState, Routine, View } from "./types";
 
 const dayNames = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const nav: { id: View; label: string; short?: string; Icon: typeof Activity }[] = [
   { id: "now", label: "Agora", Icon: Activity }, { id: "limits", label: "Limites", Icon: SlidersHorizontal },
   { id: "routines", label: "Rotinas", Icon: CalendarDays }, { id: "administration", label: "Administração", short: "Admin.", Icon: Settings },
-  { id: "communication", label: "Comunicação", short: "Comun.", Icon: SquareTerminal },
+  { id: "communication", label: "Atividade", short: "Ativ.", Icon: SquareTerminal },
 ];
 
 function fmt(seconds: number) {
@@ -20,7 +20,33 @@ function fmt(seconds: number) {
 function clock(seconds: number) { const total = Math.floor(seconds / 60); return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; }
 function seconds(value: string) { const [h, m] = value.split(":").map(Number); return h * 3600 + m * 60; }
 function lastSeen(value: string | null) { if (!value) return "Ainda não sincronizado"; const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000); return minutes < 2 ? "Agora mesmo" : `Há ${minutes} minutos`; }
-const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+function localID() { return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; }
+
+async function copyVisibleValue(value: string) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch { /* usa a cópia compatível abaixo */ }
+  }
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const temporaryField = document.createElement("textarea");
+  temporaryField.value = value;
+  temporaryField.readOnly = true;
+  temporaryField.setAttribute("aria-hidden", "true");
+  temporaryField.style.cssText = "position:fixed;inset:0 auto auto -10000px;opacity:0;pointer-events:none";
+  document.body.appendChild(temporaryField);
+  temporaryField.select();
+  temporaryField.setSelectionRange(0, value.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } finally {
+    temporaryField.remove();
+    previouslyFocused?.focus();
+  }
+  if (!copied) throw new Error("copy unavailable");
+}
 
 export function App() {
   const [devices, setDevices] = useState<Device[]>(remoteMode ? [] : mockDevices);
@@ -31,6 +57,11 @@ export function App() {
   const [loading, setLoading] = useState(remoteMode);
   const [message, setMessage] = useState("");
   const [modal, setModal] = useState<"bonus" | "device" | "routine" | null>(null);
+  const [streamState, setStreamState] = useState<LiveStreamState>(remoteMode ? "connecting" : "live");
+  const [streamGeneration, setStreamGeneration] = useState(0);
+  const [activityUpdate, setActivityUpdate] = useState<DeviceActivity | null>(null);
+  const [communicationUpdate, setCommunicationUpdate] = useState<CommunicationLog | null>(null);
+  const pendingOperations = useRef(new Set<string>());
   const selected = useMemo(() => devices.find((item) => item.id === selectedId) ?? devices[0], [devices, selectedId]);
 
   const notify = (text: string) => { setMessage(text); window.setTimeout(() => setMessage(""), 2600); };
@@ -38,36 +69,47 @@ export function App() {
   useEffect(() => { if (!remoteMode) return; api.session().then((session) => { setAuthenticated(session.authenticated); if (session.authenticated) void load(); }).catch(() => setAuthenticated(false)).finally(() => setChecking(false)); }, []);
   const applyLiveStatus = (status: LiveStatus) => setDevices((all) => all.map((item) => item.id === selected.id ? { ...item, online: status.online, graphical_session_active: status.graphical_session_active, counting: status.counting, used_seconds: status.used_seconds, remaining_seconds: status.remaining_seconds, bonus_seconds: status.bonus_seconds, today_quota_seconds: status.today_quota_seconds, last_seen_at: new Date().toISOString() } : item));
   useEffect(() => {
-    if (!remoteMode || !selected) return;
+    if (!remoteMode || !selected) {
+      setStreamState("live");
+      return;
+    }
+    setStreamState("connecting");
+    setActivityUpdate(null);
+    setCommunicationUpdate(null);
     const stream = api.openStream(selected.id);
     const onStatus = (event: MessageEvent) => { try { applyLiveStatus(JSON.parse(event.data) as LiveStatus); } catch { /* ignora evento inválido */ } };
     stream.addEventListener("hello", onStatus);
     stream.addEventListener("status", onStatus);
     stream.addEventListener("device_offline", onStatus);
+    const onActivity = (event: MessageEvent) => {
+      try {
+        const activity = JSON.parse(event.data) as DeviceActivity;
+        setActivityUpdate(activity);
+        if (activity.status === "completed" && pendingOperations.current.delete(activity.id)) {
+          notify(activity.kind === "add_bonus" ? "Tempo extra aplicado e confirmado pelo computador." : "Alteração aplicada e confirmada pelo computador.");
+        }
+      } catch { /* ignora evento inválido */ }
+    };
+    stream.addEventListener("activity_updated", onActivity);
+	stream.addEventListener("activities_changed", () => setStreamGeneration((generation) => generation + 1));
+    stream.addEventListener("communication", (event) => {
+      try { setCommunicationUpdate(JSON.parse((event as MessageEvent).data) as CommunicationLog); } catch { /* ignora evento inválido */ }
+    });
+    stream.onopen = () => {
+      setStreamState("live");
+      setStreamGeneration((generation) => generation + 1);
+    };
+    stream.onerror = () => setStreamState("interrupted");
     return () => stream.close();
   }, [selected?.id, remoteMode]);
 
   const patchDevice = (change: (device: Device) => Device) => setDevices((all) => all.map((item) => item.id === selected.id ? change(item) : item));
-  const synchronizeBonus = async (deviceId: string, operationId: string) => {
-    const deadline = Date.now() + 2 * 60 * 1000;
-    while (Date.now() < deadline) {
-      const operation = await api.bonusStatus(deviceId, operationId);
-      if (operation.acknowledged) {
-        const refreshed = await api.loadDevice(deviceId);
-        setDevices((all) => all.map((item) => item.id === deviceId ? refreshed : item));
-        notify("Tempo extra sincronizado e disponível.");
-        return;
-      }
-      await wait(2000);
-    }
-    setMessage("Tempo extra registrado; o computador ainda não confirmou a sincronização.");
-  };
-  const command = async (name: string, local: (device: Device) => Device, success: string) => { try { if (remoteMode) await api.command(selected.id, name); patchDevice(local); notify(success); if (remoteMode) await load(); } catch (error) { notify(error instanceof Error ? error.message : "Comando não enviado."); } };
+  const command = async (name: string, local: (device: Device) => Device, success: string) => { try { if (remoteMode) { const confirmation = await api.command(selected.id, name); pendingOperations.current.add(confirmation.operation_id); } patchDevice(local); notify(success); if (remoteMode) await load(); } catch (error) { notify(error instanceof Error ? error.message : "Comando não enviado."); } };
 
   if (checking) return <div className="center-state"><Brand /><span className="loader" />Verificando sessão…</div>;
   if (!authenticated) return <Login onLogin={async (login, password) => { const session = await api.login(login, password); setAuthenticated(session.authenticated); if (session.authenticated) await load(); return session.authenticated; }} />;
   if (loading && !selected) return <div className="center-state"><Brand /><span className="loader" />Organizando seus computadores…</div>;
-  if (!selected) return <div className="center-state"><Brand /><h1>Nenhum computador</h1><button className="primary-button" onClick={() => setModal("device")}><Plus size={18} />Adicionar computador</button>{modal === "device" && <DeviceModal onClose={() => setModal(null)} onSubmit={async (name) => { if (remoteMode) await api.createDevice(name); else setDevices([{ ...mockDevices[1], id: crypto.randomUUID(), name }]); setModal(null); if (remoteMode) await load(); }} />}{message && <Toast>{message}</Toast>}</div>;
+  if (!selected) return <div className="center-state"><Brand /><h1>Nenhum computador</h1><button className="primary-button" onClick={() => setModal("device")}><Plus size={18} />Adicionar computador</button>{modal === "device" && <DeviceModal onClose={() => setModal(null)} onSubmit={async (name) => { if (remoteMode) await api.createDevice(name); else setDevices([{ ...mockDevices[1], id: localID(), name }]); setModal(null); if (remoteMode) await load(); }} />}{message && <Toast>{message}</Toast>}</div>;
 
   return <div className="app-shell">
     <a className="skip" href="#workspace">Pular para o conteúdo</a>
@@ -81,13 +123,20 @@ export function App() {
         {view === "limits" && <Limits device={selected} onSave={async (weekly) => { if (remoteMode) await api.policy(selected.id, weekly, selected.warning_minutes); patchDevice((d) => ({ ...d, weekly_quota_seconds: weekly })); notify("Limites salvos."); if (remoteMode) await load(); }} />}
         {view === "routines" && <Routines device={selected} onNew={() => setModal("routine")} onToggle={async (routine) => { const next = { ...routine, enabled: !routine.enabled }; if (remoteMode) await api.routine(selected.id, withoutId(next), routine.id); patchDevice((d) => ({ ...d, routines: d.routines.map((r) => r.id === routine.id ? next : r) })); notify(next.enabled ? "Rotina ativada." : "Rotina pausada."); }} onDelete={async (routine) => { if (remoteMode) await api.deleteRoutine(selected.id, routine.id); patchDevice((d) => ({ ...d, routines: d.routines.filter((r) => r.id !== routine.id) })); notify("Rotina removida."); }} />}
         {view === "administration" && <Administration device={selected} onSave={async (name, warning) => { if (remoteMode) { await api.rename(selected.id, name); await api.policy(selected.id, selected.weekly_quota_seconds, warning); } patchDevice((d) => ({ ...d, name, warning_minutes: warning })); notify("Informações salvas."); if (remoteMode) await load(); }} onPassword={async (password, confirmation) => { if (remoteMode) await api.updatePassword(selected.id, password, confirmation); patchDevice((d) => ({ ...d, password_set: true })); notify("Senha local atualizada."); if (remoteMode) await load(); }} onIssueToken={async () => { const result = remoteMode ? await api.issueToken(selected.id) : { device_id: selected.id, device_token: mockToken() }; notify("Novo token gerado."); return result.device_token; }} onRevokeToken={async () => { if (remoteMode) await api.revokeToken(selected.id); notify("Token revogado."); }} onDelete={async () => { if (remoteMode) await api.deleteDevice(selected.id); const remaining = devices.filter((device) => device.id !== selected.id); setDevices(remaining); setSelectedId(remaining[0]?.id ?? ""); setView("now"); notify("Computador excluído."); }} />}
-        {view === "communication" && <CommunicationPage deviceId={selected.id} deviceName={selected.name} />}
+        {view === "communication" && <CommunicationPage
+          activityUpdate={activityUpdate}
+          communicationUpdate={communicationUpdate}
+          deviceId={selected.id}
+          deviceName={selected.name}
+          streamGeneration={streamGeneration}
+          streamState={streamState}
+        />}
       </div>
     </main>
     <nav className="bottom-nav">{nav.map(({ id, label, short, Icon }) => <button className={view === id ? "active" : ""} key={id} onClick={() => setView(id)}><Icon size={21} /><span>{short ?? label}</span></button>)}</nav>
-    {modal === "bonus" && <BonusModal onClose={() => setModal(null)} onSubmit={async (minutes) => { if (!remoteMode) { patchDevice((d) => ({ ...d, bonus_seconds: d.bonus_seconds + minutes * 60, remaining_seconds: d.remaining_seconds + minutes * 60 })); setModal(null); notify(`${minutes} minutos adicionados.`); return; } const confirmation = await api.bonus(selected.id, minutes); setModal(null); setMessage("Tempo extra registrado. Sincronizando com o computador…"); void synchronizeBonus(selected.id, confirmation.operation_id).catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível confirmar a sincronização.")); }} />}
-    {modal === "device" && <DeviceModal onClose={() => setModal(null)} onSubmit={async (name) => { if (remoteMode) { const created = await api.createDevice(name); setSelectedId(created.id); await load(); } else { const device = { ...mockDevices[1], id: crypto.randomUUID(), name }; setDevices((all) => [...all, device]); setSelectedId(device.id); } setModal(null); notify("Computador adicionado."); }} />}
-    {modal === "routine" && <RoutineModal routines={selected.routines} onClose={() => setModal(null)} onSubmit={async (draft) => { if (remoteMode) await api.routine(selected.id, draft); patchDevice((d) => ({ ...d, routines: [...d.routines, { ...draft, id: crypto.randomUUID() }] })); setModal(null); notify("Rotina criada."); if (remoteMode) await load(); }} />}
+    {modal === "bonus" && <BonusModal onClose={() => setModal(null)} onSubmit={async (minutes) => { if (!remoteMode) { patchDevice((d) => ({ ...d, bonus_seconds: d.bonus_seconds + minutes * 60, remaining_seconds: d.remaining_seconds + minutes * 60 })); setModal(null); notify(`${minutes} minutos adicionados.`); return; } const confirmation = await api.bonus(selected.id, minutes); pendingOperations.current.add(confirmation.operation_id); setModal(null); setMessage("Pedido guardado pelo servidor. Aguardando o computador confirmar."); }} />}
+    {modal === "device" && <DeviceModal onClose={() => setModal(null)} onSubmit={async (name) => { if (remoteMode) { const created = await api.createDevice(name); setSelectedId(created.id); await load(); } else { const device = { ...mockDevices[1], id: localID(), name }; setDevices((all) => [...all, device]); setSelectedId(device.id); } setModal(null); notify("Computador adicionado."); }} />}
+    {modal === "routine" && <RoutineModal routines={selected.routines} onClose={() => setModal(null)} onSubmit={async (draft) => { const saved = remoteMode ? await api.routine(selected.id, draft) : { id: localID() }; patchDevice((d) => ({ ...d, routines: [...d.routines, { ...draft, id: saved.id || localID() }] })); setModal(null); notify("Rotina criada."); if (remoteMode) await load(); }} />}
     {message && <Toast>{message}</Toast>}
   </div>;
 }
@@ -151,14 +200,30 @@ function Routines({ device, onNew, onToggle, onDelete }: { device: Device; onNew
 function Administration({ device, onSave, onPassword, onIssueToken, onRevokeToken, onDelete }: { device: Device; onSave: (name: string, warning: number) => Promise<void>; onPassword: (password: string, confirmation: string) => Promise<void>; onIssueToken: () => Promise<string>; onRevokeToken: () => Promise<void>; onDelete: () => Promise<void> }) {
   const [name, setName] = useState(device.name); const [warning, setWarning] = useState(device.warning_minutes); const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState(""); const [confirmation, setConfirmation] = useState(""); const [passwordBusy, setPasswordBusy] = useState(false); const [passwordTouched, setPasswordTouched] = useState(false);
-  const [token, setToken] = useState(""); const [tokenBusy, setTokenBusy] = useState(false); const [credentialAction, setCredentialAction] = useState<"issue" | "revoke" | null>(null); const [copied, setCopied] = useState<"id" | "token" | "">("");
+  const [token, setToken] = useState(""); const [tokenBusy, setTokenBusy] = useState(false); const [credentialAction, setCredentialAction] = useState<"issue" | "revoke" | null>(null); const [copyFeedback, setCopyFeedback] = useState<{ kind: "id" | "token"; status: "success" | "error" } | null>(null); const copyFeedbackTimer = useRef<number | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false); const [deleteBusy, setDeleteBusy] = useState(false); const [deleteError, setDeleteError] = useState("");
   const passwordError = passwordTouched && !password ? "Informe uma senha." : passwordTouched && password !== confirmation ? "As senhas não coincidem." : "";
-  const copyValue = async (value: string, kind: "id" | "token") => { try { await navigator.clipboard.writeText(value); setCopied(kind); window.setTimeout(() => setCopied(""), 1800); } catch { setCopied(""); } };
+  useEffect(() => () => { if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current); }, []);
+  const copyValue = async (value: string, kind: "id" | "token") => {
+    if (copyFeedbackTimer.current !== null) window.clearTimeout(copyFeedbackTimer.current);
+    try {
+      await copyVisibleValue(value);
+      setCopyFeedback({ kind, status: "success" });
+      try { if ("vibrate" in navigator) navigator.vibrate(24); } catch { /* confirmação visual permanece disponível */ }
+    } catch {
+      setCopyFeedback({ kind, status: "error" });
+    }
+    copyFeedbackTimer.current = window.setTimeout(() => setCopyFeedback(null), 2200);
+  };
+  const copyButton = (value: string, kind: "id" | "token", label: string) => {
+    const status = copyFeedback?.kind === kind ? copyFeedback.status : "idle";
+    const text = status === "success" ? "Copiado!" : status === "error" ? "Não copiou" : "Copiar";
+    return <button aria-label={status === "success" ? `${label} copiado` : status === "error" ? `Não foi possível copiar ${label.toLowerCase()}` : `Copiar ${label.toLowerCase()}`} className={`copy-button ${status}`} onClick={() => void copyValue(value, kind)} type="button">{status === "success" ? <Check aria-hidden="true" size={17} /> : status === "error" ? <X aria-hidden="true" size={17} /> : <Copy aria-hidden="true" size={17} />}<span aria-live="polite">{text}</span></button>;
+  };
   return <section className="editor-page"><header><div><h2>Administração</h2><p>Identidade, acesso e segurança deste computador.</p></div></header><div className="administration-sections">
     <section className="admin-section"><div className="admin-section-heading"><Settings size={21} /><div><h3>Informações</h3><p>Nome e aviso de encerramento.</p></div></div><form className="admin-form" onSubmit={async (event) => { event.preventDefault(); setBusy(true); try { await onSave(name.trim(), warning); } finally { setBusy(false); } }}><label>Nome do computador<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Aviso antes do fim<select value={warning} onChange={(event) => setWarning(Number(event.target.value))}>{[5, 10, 15, 30].map((item) => <option key={item} value={item}>{item} minutos</option>)}</select></label><button className="primary-button" disabled={!name.trim() || busy}><Save size={18} />{busy ? "Salvando…" : "Salvar informações"}</button></form></section>
     <section className="admin-section"><div className="admin-section-heading"><LockKeyhole size={21} /><div><h3>{device.password_set ? "Alterar senha local" : "Configurar senha local"}</h3><p>Autoriza tempo adicional diretamente no computador.</p></div></div><form className="admin-form" noValidate onSubmit={async (event) => { event.preventDefault(); setPasswordTouched(true); if (!password || password !== confirmation) return; setPasswordBusy(true); try { await onPassword(password, confirmation); setPassword(""); setConfirmation(""); setPasswordTouched(false); } finally { setPasswordBusy(false); } }}><label>Nova senha<input aria-invalid={Boolean(passwordError)} autoComplete="new-password" type="password" value={password} onBlur={() => setPasswordTouched(true)} onChange={(event) => setPassword(event.target.value)} /></label><label>Confirmar senha<input aria-invalid={Boolean(passwordError)} autoComplete="new-password" type="password" value={confirmation} onBlur={() => setPasswordTouched(true)} onChange={(event) => setConfirmation(event.target.value)} /></label>{passwordError && <p className="field-error"><X size={15} />{passwordError}</p>}<button className="primary-button" disabled={!password || password !== confirmation || passwordBusy}><Save size={18} />{passwordBusy ? "Salvando…" : "Salvar senha"}</button></form></section>
-    <section className="admin-section pairing-section"><div className="admin-section-heading"><KeyRound size={21} /><div><h3>Liberar acesso do agente</h3><p>Use estes dados para conectar esta máquina.</p></div></div><div className="credential-field"><span>Identificador <code>device_id</code></span><div><code>{device.id}</code><button aria-label="Copiar identificador" onClick={() => void copyValue(device.id, "id")}><Copy size={17} />{copied === "id" ? "Copiado" : "Copiar"}</button></div></div>{token ? <div className="credential-field token-reveal" role="status"><span>Token — copie agora <code>device_token</code></span><p>Este token será exibido somente desta vez.</p><div><code>{token}</code><button aria-label="Copiar token" onClick={() => void copyValue(token, "token")}><Copy size={17} />{copied === "token" ? "Copiado" : "Copiar"}</button></div></div> : <p className="credential-note">O token atual não pode ser consultado. Gere um novo apenas quando for configurar o agente.</p>}<div className="credential-actions"><button className="primary-button" disabled={tokenBusy} onClick={() => setCredentialAction("issue")}><RefreshCw size={18} />Gerar novo token</button><button className="danger-button" disabled={tokenBusy} onClick={() => setCredentialAction("revoke")}><ShieldOff size={18} />Revogar token</button></div></section>
+    <section className="admin-section pairing-section"><div className="admin-section-heading"><KeyRound size={21} /><div><h3>Liberar acesso do agente</h3><p>Use estes dados para conectar esta máquina.</p></div></div><div className="credential-field"><span>Identificador <code>device_id</code></span><div><code>{device.id}</code>{copyButton(device.id, "id", "Identificador")}</div></div>{token ? <div className="credential-field token-reveal"><span>Token — copie agora <code>device_token</code></span><p>Este token será exibido somente desta vez.</p><div><code>{token}</code>{copyButton(token, "token", "Token")}</div></div> : <p className="credential-note">O token atual não pode ser consultado. Gere um novo apenas quando for configurar o agente.</p>}<div className="credential-actions"><button className="primary-button" disabled={tokenBusy} onClick={() => setCredentialAction("issue")}><RefreshCw size={18} />Gerar novo token</button><button className="danger-button" disabled={tokenBusy} onClick={() => setCredentialAction("revoke")}><ShieldOff size={18} />Revogar token</button></div></section>
     <section className="technical admin-section"><div className="admin-section-heading"><MonitorCheck size={21} /><div><h3>Estado técnico</h3><p>Aplicação e sincronização.</p></div></div><Row Icon={ShieldCheck} label="Senha local" value={device.password_set ? "Configurada" : "Não configurada"} /><Row Icon={RefreshCw} label="Última sincronização" value={lastSeen(device.last_seen_at)} /></section>
     <section className="admin-section device-danger-zone"><div className="admin-section-heading"><Trash2 size={21} /><div><h3>Excluir computador</h3><p>Remove este computador e todas as suas configurações.</p></div></div><button className="danger-button" onClick={() => { setDeleteError(""); setDeleteOpen(true); }}><Trash2 size={18} />Excluir computador</button></section>
   </div>{credentialAction && <Modal title={credentialAction === "issue" ? "Gerar novo token?" : "Revogar token?"} description={credentialAction === "issue" ? "Se existir um token anterior, ele deixará de funcionar imediatamente." : "O agente perderá o acesso até que um novo token seja configurado."} onClose={() => setCredentialAction(null)}><div className="modal-actions"><button onClick={() => setCredentialAction(null)}>Cancelar</button><button className={credentialAction === "issue" ? "primary" : "danger-confirm"} disabled={tokenBusy} onClick={async () => { setTokenBusy(true); try { if (credentialAction === "issue") setToken(await onIssueToken()); else { await onRevokeToken(); setToken(""); } setCredentialAction(null); } finally { setTokenBusy(false); } }}>{credentialAction === "issue" ? "Gerar token" : "Revogar acesso"}</button></div></Modal>}{deleteOpen && <Modal title="Excluir computador?" description={`“${device.name}” será removido permanentemente. O agente perderá o acesso e precisará ser cadastrado novamente.`} onClose={() => !deleteBusy && setDeleteOpen(false)}>{deleteError && <div className="routine-conflict-alert" role="alert"><AlertTriangle aria-hidden="true" size={20} /><div><strong>Não foi possível excluir</strong><span>{deleteError}</span></div></div>}<div className="modal-actions"><button disabled={deleteBusy} onClick={() => setDeleteOpen(false)}>Cancelar</button><button className="danger-confirm" disabled={deleteBusy} onClick={async () => { setDeleteBusy(true); setDeleteError(""); try { await onDelete(); setDeleteOpen(false); } catch (error) { setDeleteError(error instanceof Error ? error.message : "Tente novamente."); } finally { setDeleteBusy(false); } }}><Trash2 size={18} />{deleteBusy ? "Excluindo…" : "Excluir"}</button></div></Modal>}</section>;
