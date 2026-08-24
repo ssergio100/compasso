@@ -1,0 +1,1649 @@
+{
+  "info": {
+    "_postman_id": "b6524d59-9239-4cb8-b763-991b294d55dc",
+    "name": "Compasso API — ADM, Servidor e Agente",
+    "description": "Coleção operacional da API vigente do Compasso.\n\nAbrange a comunicação entre a interface administrativa (ADM), o servidor e o agente monitorado. A especificação detalhada está em `docs/arquitetura-comunicacao.md`.\n\nFluxo recomendado:\n1. Execute `00 - Saúde`.\n2. Em instalação nova, execute `01 - Setup inicial`; caso contrário, faça login em `02 - Sessão administrativa`.\n3. Cadastre ou selecione um dispositivo em `03 - Devices`.\n4. Emita configurações e ações administrativas.\n5. Use `11 - Atividades humanas` para acompanhar o resultado compreensível por pessoas.\n6. Use `12 - Diagnóstico técnico` apenas para investigar a comunicação.\n7. Use `14 - Device / Agent Heartbeat` para simular o agente.\n\nObservações importantes:\n- O Postman precisa manter o cookie de sessão recebido no login.\n- Requisições administrativas mutáveis exigem o cabeçalho `X-CSRF-Token`.\n- Resposta HTTP 202 em bônus e comandos significa que o servidor aceitou a operação, não que o agente já a executou.\n- A conclusão aparece após o agente confirmar a operação em um heartbeat.\n- Heartbeats usam `Authorization: Bearer <token>`, `X-Tempo-Device-ID` e `X-Compasso-Protocol-Version: 2`.\n- Requisições marcadas como DESTRUTIVAS ocultam ou removem dados e devem ser executadas conscientemente.\n- O endpoint SSE permanece aberto enquanto transmite atualizações.\n\nAtualizada em 2026-08-24.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://192.168.18.10:8181",
+      "type": "string"
+    },
+    {
+      "key": "admin_login",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "admin_password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "setup_login",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "setup_password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "login_csrf_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "csrf_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "setup_required",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "authenticated_login",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "device_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "device_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "device_name",
+      "value": "PC de teste",
+      "type": "string"
+    },
+    {
+      "key": "routine_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "local_responsible_password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "bonus_minutes",
+      "value": "10",
+      "type": "string"
+    },
+    {
+      "key": "events_limit",
+      "value": "30",
+      "type": "string"
+    },
+    {
+      "key": "policy_revision",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "control_revision",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "session_state_revision",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "graphical_session_id",
+      "value": "postman-session-001",
+      "type": "string"
+    },
+    {
+      "key": "command_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "local_date",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "operation_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "activity_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "activities_limit",
+      "value": "100",
+      "type": "string"
+    },
+    {
+      "key": "communication_limit",
+      "value": "200",
+      "type": "string"
+    },
+    {
+      "key": "communication_after",
+      "value": "0",
+      "type": "string"
+    },
+    {
+      "key": "retention_days",
+      "value": "30",
+      "type": "string"
+    },
+    {
+      "key": "local_bonus_event_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "protocol_version",
+      "value": "2",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Saúde",
+      "item": [
+        {
+          "name": "GET Healthcheck",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/healthz",
+            "description": "Verifica se o servidor HTTP está acessível. Não exige sessão administrativa."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - Setup inicial (somente primeira instalação)",
+      "description": "Use apenas se `setup_required` vier como true. Depois que existir um administrador, o setup retorna conflito.",
+      "item": [
+        {
+          "name": "GET Admin Session / Bootstrap CSRF",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/session",
+            "description": "Cria o cookie temporário de CSRF de login/setup e devolve `csrf_token` e `setup_required`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.csrf_token) {",
+                  "  pm.collectionVariables.set('login_csrf_token', data.csrf_token);",
+                  "  if (data.authenticated) pm.collectionVariables.set('csrf_token', data.csrf_token);",
+                  "}",
+                  "if (typeof data.setup_required !== 'undefined') {",
+                  "  pm.collectionVariables.set('setup_required', String(data.setup_required));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Setup inicial",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/setup",
+            "description": "Cria o primeiro administrador e já inicia a sessão. Só funciona quando ainda não existe administrador.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{setup_login}}\",\n  \"password\": \"{{setup_password}}\",\n  \"password_confirmation\": \"{{setup_password}}\",\n  \"csrf_token\": \"{{login_csrf_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login/setup succeeded', function () { pm.expect(pm.response.code).to.be.oneOf([200, 201]); });",
+                  "const data = pm.response.json();",
+                  "if (data.csrf_token) pm.collectionVariables.set('csrf_token', data.csrf_token);",
+                  "if (data.login) pm.collectionVariables.set('authenticated_login', data.login);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Sessão administrativa",
+      "item": [
+        {
+          "name": "GET Admin Session / Bootstrap CSRF",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/session",
+            "description": "Se não autenticado, cria o CSRF temporário para login. Se autenticado, devolve o CSRF da sessão."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.csrf_token) {",
+                  "  pm.collectionVariables.set('login_csrf_token', data.csrf_token);",
+                  "  if (data.authenticated) pm.collectionVariables.set('csrf_token', data.csrf_token);",
+                  "}",
+                  "if (typeof data.setup_required !== 'undefined') {",
+                  "  pm.collectionVariables.set('setup_required', String(data.setup_required));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/session",
+            "description": "Autentica o administrador. O Postman armazena o cookie de sessão automaticamente.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{admin_login}}\",\n  \"password\": \"{{admin_password}}\",\n  \"csrf_token\": \"{{login_csrf_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login/setup succeeded', function () { pm.expect(pm.response.code).to.be.oneOf([200, 201]); });",
+                  "const data = pm.response.json();",
+                  "if (data.csrf_token) pm.collectionVariables.set('csrf_token', data.csrf_token);",
+                  "if (data.login) pm.collectionVariables.set('authenticated_login', data.login);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Sessão atual",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/session",
+            "description": "Confirma a sessão atual e atualiza `csrf_token`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.csrf_token) pm.collectionVariables.set('csrf_token', data.csrf_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE Logout",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/session",
+            "description": "Encerra a sessão administrativa atual. Esperado: HTTP 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Devices",
+      "item": [
+        {
+          "name": "GET List Devices",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices",
+            "description": "Lista os dispositivos cadastrados."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Create Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices",
+            "description": "Cria um dispositivo. O nome é obrigatório e aceita até 80 caracteres. Captura o ID em `device_id`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{device_name}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', function () { pm.response.to.have.status(201); });",
+                  "const data = pm.response.json();",
+                  "if (data.id) pm.collectionVariables.set('device_id', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Device Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}",
+            "description": "Retorna o dispositivo e seu estado consolidado: cadastro, política, controle, status e eventos recentes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.control && typeof data.control.revision !== 'undefined') pm.collectionVariables.set('control_revision', String(data.control.revision));",
+                  "if (data.policy && typeof data.policy.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('policy_revision', String(data.policy.revision));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH Rename Device",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}",
+            "description": "Renomeia o dispositivo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{device_name}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE Device",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}",
+            "description": "EXCLUSÃO destrutiva do dispositivo selecionado. Esperado: HTTP 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Policy",
+      "description": "O array `weekly_quota_seconds` contém 7 valores em segundos. O servidor limita cada dia a 0..86400 e warning_minutes a 0..120.",
+      "item": [
+        {
+          "name": "PUT Policy / Quotas",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/policy",
+            "description": "Atualiza cotas semanais e minutos de aviso. Cada quota deve estar entre 0 e 86400 segundos.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"weekly_quota_seconds\": [\n    7200,\n    7200,\n    7200,\n    7200,\n    7200,\n    7200,\n    7200\n  ],\n  \"warning_minutes\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - Routines",
+      "description": "Horários são segundos desde 00:00. Exemplo: 13:00 = 46800; 17:00 = 61200. Pelo menos um dia deve estar marcado.",
+      "item": [
+        {
+          "name": "POST Create Routine",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/routines",
+            "description": "Cria uma rotina e captura seu ID em `routine_id`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Estudo\",\n  \"days\": [\n    false,\n    true,\n    true,\n    true,\n    true,\n    true,\n    false\n  ],\n  \"start_second\": 46800,\n  \"end_second\": 61200,\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', function () { pm.response.to.have.status(201); });",
+                  "const data = pm.response.json();",
+                  "if (data.id) pm.collectionVariables.set('routine_id', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PUT Update Routine",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/routines/{{routine_id}}",
+            "description": "Atualiza uma rotina existente.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Estudo\",\n  \"days\": [\n    false,\n    true,\n    true,\n    true,\n    true,\n    true,\n    false\n  ],\n  \"start_second\": 46800,\n  \"end_second\": 61200,\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE Routine",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/routines/{{routine_id}}",
+            "description": "Exclui a rotina selecionada. Esperado: HTTP 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 - Senha local",
+      "item": [
+        {
+          "name": "PUT Local Responsible Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/password",
+            "description": "Define/altera a senha local do responsável. A API gera o verificador Argon2 internamente.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{local_responsible_password}}\",\n  \"password_confirmation\": \"{{local_responsible_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 - Token do agente",
+      "item": [
+        {
+          "name": "POST Issue / Replace Device Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/token",
+            "description": "Emite um novo token para o agente. Substitui a credencial anterior e captura `device_token`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', function () { pm.response.to.have.status(201); });",
+                  "const data = pm.response.json();",
+                  "if (data.device_id) pm.collectionVariables.set('device_id', data.device_id);",
+                  "if (data.device_token) pm.collectionVariables.set('device_token', data.device_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE Revoke Device Token",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/token",
+            "description": "Revoga o token atual sem emitir substituto. Esperado: HTTP 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', function () { pm.response.to.have.status(204); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 - Bonus",
+      "item": [
+        {
+          "name": "POST Add Remote Bonus",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/bonus",
+            "description": "Solicita bônus remoto em minutos.\n\nHTTP 202 confirma somente que o servidor registrou a operação. Guarde `operation_id` e acompanhe a atividade até o agente confirmar a execução.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"minutes\": {{bonus_minutes}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 — operação aceita pelo servidor\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const data = pm.response.json();",
+                  "if (data.operation_id) {",
+                  "  pm.collectionVariables.set('operation_id', data.operation_id);",
+                  "  pm.collectionVariables.set('command_id', data.operation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Remote Bonus Acknowledgement",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Resposta informa acknowledged\", function () {",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data).to.have.property('acknowledged');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/commands/{{operation_id}}",
+            "description": "Endpoint de compatibilidade para verificar se um bônus remoto foi confirmado pelo agente.\n\nUse o `operation_id` retornado por `POST Add Remote Bonus`. Este endpoint é específico para bônus remoto; para qualquer tipo de operação use a atividade correspondente."
+          },
+          "response": []
+        }
+      ],
+      "description": "Bônus remoto é assíncrono: o servidor aceita, o agente recebe no heartbeat e confirma depois."
+    },
+    {
+      "name": "09 - Commands",
+      "item": [
+        {
+          "name": "POST Pause Monitoring",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/commands",
+            "description": "Solicita pausa do monitoramento. O servidor grava um comando de controle para entrega ao agente; HTTP 202 ainda não significa execução.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"command\": \"pause_monitoring\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 — operação aceita pelo servidor\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const data = pm.response.json();",
+                  "if (data.operation_id) {",
+                  "  pm.collectionVariables.set('operation_id', data.operation_id);",
+                  "  pm.collectionVariables.set('command_id', data.operation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Resume Monitoring",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/commands",
+            "description": "Solicita retomada do monitoramento. O servidor grava um comando de controle para entrega ao agente; HTTP 202 ainda não significa execução.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"command\": \"resume_monitoring\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 — operação aceita pelo servidor\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const data = pm.response.json();",
+                  "if (data.operation_id) {",
+                  "  pm.collectionVariables.set('operation_id', data.operation_id);",
+                  "  pm.collectionVariables.set('command_id', data.operation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Block Now",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/commands",
+            "description": "Solicita bloqueio manual imediato. O agente precisa receber e confirmar a operação.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"command\": \"block_now\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 — operação aceita pelo servidor\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const data = pm.response.json();",
+                  "if (data.operation_id) {",
+                  "  pm.collectionVariables.set('operation_id', data.operation_id);",
+                  "  pm.collectionVariables.set('command_id', data.operation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Clear Manual Block",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/commands",
+            "description": "Solicita a remoção do bloqueio manual. O agente precisa receber e confirmar a operação.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"command\": \"clear_manual_block\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 202 — operação aceita pelo servidor\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const data = pm.response.json();",
+                  "if (data.operation_id) {",
+                  "  pm.collectionVariables.set('operation_id', data.operation_id);",
+                  "  pm.collectionVariables.set('command_id', data.operation_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 - Status e auditoria",
+      "item": [
+        {
+          "name": "GET Device Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/status",
+            "description": "Consulta o estado consolidado mais recente informado pelo agente."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Device Events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/events?limit={{events_limit}}",
+            "description": "Consulta eventos de auditoria do dispositivo. Para ações e resultados legíveis, use a pasta de atividades."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11 - Atividades humanas",
+      "description": "Visão legível das ações e dos resultados.\n\nEstados principais: pendente, concluída ou falhou. Limpar concluídas apenas oculta essas atividades; a retenção automática cuida do histórico conforme as regras do servidor.",
+      "item": [
+        {
+          "name": "GET Activities",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "",
+                  "const data = pm.response.json();",
+                  "const activities = data.activities || [];",
+                  "if (activities.length && activities[0].id) {",
+                  "  pm.collectionVariables.set('activity_id', activities[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/activities?limit={{activities_limit}}",
+            "description": "Lista atividades do dispositivo em linguagem adequada à interface administrativa. Captura o ID da primeira atividade para consultar detalhes."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Activity Detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/activities/{{activity_id}}",
+            "description": "Mostra o ciclo completo de uma atividade, incluindo contexto e detalhes técnicos quando disponíveis."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Completed Activities",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/activities/completed",
+            "description": "DESTRUTIVA NA INTERFACE: limpa da visualização as atividades já concluídas.\n\nAtividades pendentes ou com falha não são removidas por esta ação."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "12 - Diagnóstico técnico",
+      "description": "Registros técnicos da comunicação ADM ↔ servidor ↔ agente.\n\nUse para investigar falhas. Para acompanhamento cotidiano, prefira `11 - Atividades humanas`. A limpeza deste diagnóstico não apaga atividades humanas.",
+      "item": [
+        {
+          "name": "GET Communication Logs - Recent",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "",
+                  "const data = pm.response.json();",
+                  "const entries = data.events || [];",
+                  "const ids = entries.map(item => Number(item.id)).filter(Number.isFinite);",
+                  "if (ids.length) {",
+                  "  pm.collectionVariables.set('communication_after', String(Math.max(...ids)));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/communication?limit={{communication_limit}}",
+            "description": "Lista as comunicações técnicas mais recentes e captura o maior ID para uma consulta incremental posterior."
+          },
+          "response": []
+        },
+        {
+          "name": "GET Communication Logs - Incremental",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/communication?limit={{communication_limit}}&after={{communication_after}}",
+            "description": "Busca somente registros posteriores ao ID armazenado em `communication_after`, útil para acompanhar novas mensagens sem recarregar todo o histórico."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT Communication Retention",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/communication/settings",
+            "description": "Define por quantos dias os registros técnicos serão mantidos. O padrão operacional da coleção é 30 dias.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"retention_days\": {{retention_days}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Communication Logs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/communication",
+            "description": "DESTRUTIVA: exclui os registros de diagnóstico técnico do dispositivo.\n\nNão exclui o dispositivo nem limpa as atividades humanas."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "13 - Eventos em tempo real (SSE)",
+      "description": "Canal usado pela interface ADM para receber atualizações sem polling constante.",
+      "item": [
+        {
+          "name": "GET Device Event Stream",
+          "event": [],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/admin/devices/{{device_id}}/stream",
+            "description": "Abre o fluxo Server-Sent Events do dispositivo.\n\nA requisição permanece aberta e entrega eventos à medida que o servidor publica mudanças. Execute manualmente e interrompa quando concluir a observação; não é indicada para o Collection Runner."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "14 - Device / Agent Heartbeat",
+      "description": "Simula o agente monitorado.\n\nTodo heartbeat deve enviar `Authorization: Bearer <device_token>`, `X-Tempo-Device-ID` e `X-Compasso-Protocol-Version: 2`. A resposta pode conter política, controle e comandos pendentes. O agente aplica as mudanças e confirma IDs recebidos no heartbeat seguinte.",
+      "item": [
+        {
+          "name": "POST Heartbeat - Minimal / Inactive Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Tempo-Device-ID",
+                "value": "{{device_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{device_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Compasso-Protocol-Version",
+                "value": "{{protocol_version}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/device/heartbeat",
+            "description": "Heartbeat mínimo sem sessão gráfica ativa.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy_revision\": {{policy_revision}},\n  \"control_revision\": {{control_revision}},\n  \"session_state_revision\": {{session_state_revision}},\n  \"local_date\": \"{{local_date}}\",\n  \"seconds_used\": 0,\n  \"graphical_session_active\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const yyyy = d.getFullYear();",
+                  "const mm = String(d.getMonth() + 1).padStart(2, '0');",
+                  "const dd = String(d.getDate()).padStart(2, '0');",
+                  "pm.collectionVariables.set('local_date', `${yyyy}-${mm}-${dd}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.control && typeof data.control.revision !== 'undefined') pm.collectionVariables.set('control_revision', String(data.control.revision));",
+                  "if (data.policy && typeof data.policy.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('policy_revision', String(data.policy.revision));",
+                  "}",
+                  "if (data.session_state && typeof data.session_state.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('session_state_revision', String(data.session_state.revision));",
+                  "}",
+                  "if (Array.isArray(data.commands) && data.commands.length > 0 && data.commands[0].id) {",
+                  "  pm.collectionVariables.set('command_id', data.commands[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Heartbeat - Active Graphical Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Tempo-Device-ID",
+                "value": "{{device_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{device_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Compasso-Protocol-Version",
+                "value": "{{protocol_version}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/device/heartbeat",
+            "description": "Simula uma sessão gráfica ativa e pede âncora autoritativa do saldo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy_revision\": {{policy_revision}},\n  \"control_revision\": {{control_revision}},\n  \"session_state_revision\": {{session_state_revision}},\n  \"local_date\": \"{{local_date}}\",\n  \"seconds_used\": 120,\n  \"graphical_session_active\": true,\n  \"graphical_session_locked\": false,\n  \"graphical_session_id\": \"{{graphical_session_id}}\",\n  \"request_session_state\": true,\n  \"events\": [],\n  \"command_acks\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const yyyy = d.getFullYear();",
+                  "const mm = String(d.getMonth() + 1).padStart(2, '0');",
+                  "const dd = String(d.getDate()).padStart(2, '0');",
+                  "pm.collectionVariables.set('local_date', `${yyyy}-${mm}-${dd}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.control && typeof data.control.revision !== 'undefined') pm.collectionVariables.set('control_revision', String(data.control.revision));",
+                  "if (data.policy && typeof data.policy.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('policy_revision', String(data.policy.revision));",
+                  "}",
+                  "if (data.session_state && typeof data.session_state.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('session_state_revision', String(data.session_state.revision));",
+                  "}",
+                  "if (Array.isArray(data.commands) && data.commands.length > 0 && data.commands[0].id) {",
+                  "  pm.collectionVariables.set('command_id', data.commands[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Heartbeat - ACK Pending Command",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Tempo-Device-ID",
+                "value": "{{device_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{device_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Compasso-Protocol-Version",
+                "value": "{{protocol_version}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/device/heartbeat",
+            "description": "Confirma o primeiro command_id capturado de um heartbeat anterior.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy_revision\": {{policy_revision}},\n  \"control_revision\": {{control_revision}},\n  \"session_state_revision\": {{session_state_revision}},\n  \"local_date\": \"{{local_date}}\",\n  \"seconds_used\": 120,\n  \"graphical_session_active\": true,\n  \"graphical_session_locked\": true,\n  \"graphical_session_id\": \"{{graphical_session_id}}\",\n  \"command_acks\": [\n    \"{{command_id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = new Date();",
+                  "const yyyy = d.getFullYear();",
+                  "const mm = String(d.getMonth() + 1).padStart(2, '0');",
+                  "const dd = String(d.getDate()).padStart(2, '0');",
+                  "pm.collectionVariables.set('local_date', `${yyyy}-${mm}-${dd}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.control && typeof data.control.revision !== 'undefined') pm.collectionVariables.set('control_revision', String(data.control.revision));",
+                  "if (data.policy && typeof data.policy.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('policy_revision', String(data.policy.revision));",
+                  "}",
+                  "if (data.session_state && typeof data.session_state.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('session_state_revision', String(data.session_state.revision));",
+                  "}",
+                  "if (Array.isArray(data.commands) && data.commands.length > 0 && data.commands[0].id) {",
+                  "  pm.collectionVariables.set('command_id', data.commands[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Heartbeat - Local Bonus Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Tempo-Device-ID",
+                "value": "{{device_id}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{device_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Compasso-Protocol-Version",
+                "value": "{{protocol_version}}"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/device/heartbeat",
+            "description": "Simula um bônus criado localmente no agente.\n\nUm UUID novo é gerado antes de cada envio para evitar que a idempotência interprete testes diferentes como repetição do mesmo evento.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy_revision\": {{policy_revision}},\n  \"control_revision\": {{control_revision}},\n  \"session_state_revision\": {{session_state_revision}},\n  \"local_date\": \"{{local_date}}\",\n  \"seconds_used\": 120,\n  \"graphical_session_active\": true,\n  \"graphical_session_locked\": false,\n  \"graphical_session_id\": \"{{graphical_session_id}}\",\n  \"events\": [\n    {\n      \"uuid\": \"{{local_bonus_event_id}}\",\n      \"kind\": \"bonus_added\",\n      \"payload\": {\n        \"local_date\": \"{{local_date}}\",\n        \"seconds\": 600,\n        \"origin\": \"local\"\n      },\n      \"created_at\": \"{{$isoTimestamp}}\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('local_date', new Date().toISOString().slice(0, 10));",
+                  "pm.collectionVariables.set('local_bonus_event_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "const data = pm.response.json();",
+                  "if (data.control && typeof data.control.revision !== 'undefined') pm.collectionVariables.set('control_revision', String(data.control.revision));",
+                  "if (data.policy && typeof data.policy.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('policy_revision', String(data.policy.revision));",
+                  "}",
+                  "if (data.session_state && typeof data.session_state.revision !== 'undefined') {",
+                  "  pm.collectionVariables.set('session_state_revision', String(data.session_state.revision));",
+                  "}",
+                  "if (Array.isArray(data.commands) && data.commands.length > 0 && data.commands[0].id) {",
+                  "  pm.collectionVariables.set('command_id', data.commands[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
