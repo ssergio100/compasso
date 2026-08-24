@@ -13,13 +13,24 @@ from urllib.parse import urlparse
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk
+from gi.repository import Gio, GLib, Gtk
 
 
 DEFAULT_SERVER_URL = "https://apicompasso.smresume.com"
 SETUP_MARKER_PATH = "/etc/tempo-agent/setup-complete"
 PRIVILEGED_HELPER_PATH = "/usr/sbin/tempo-agent-configure"
 PKEXEC_PATH = "/usr/bin/pkexec"
+BUS_NAME = "br.com.tempo.Agent"
+OBJECT_PATH = "/br/com/tempo/Agent"
+INTERFACE_NAME = "br.com.tempo.Agent"
+
+
+def synchronization_status_text(state):
+    return {
+        "online": "● Servidor online",
+        "offline": "○ Servidor sem comunicação",
+        "checking": "◌ Aguardando primeira comunicação com o servidor…",
+    }.get(state, "○ Estado de comunicação desconhecido")
 
 
 def available_controlled_users():
@@ -110,6 +121,7 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
         super().__init__(application=application, title="Compasso — Configurar agente")
         self.set_default_size(540, 520)
         self.set_resizable(False)
+        self.status_proxy = None
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         content.set_margin_top(24)
@@ -133,9 +145,13 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
         description.set_halign(Gtk.Align.START)
         content.append(description)
 
-        self.server_connection_status = Gtk.Label(label="○ Servidor ainda não verificado")
+        self.server_connection_status = Gtk.Label(
+            label=synchronization_status_text("checking")
+        )
         self.server_connection_status.set_halign(Gtk.Align.START)
         content.append(self.server_connection_status)
+        GLib.idle_add(self._refresh_server_status)
+        GLib.timeout_add_seconds(2, self._refresh_server_status)
 
         controlled_users = available_controlled_users()
         selected_controlled_user = initial_controlled_user(controlled_users)
@@ -226,6 +242,33 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
             and self.controlled_user_confirmation.get_active()
         )
 
+    def _refresh_server_status(self):
+        try:
+            if self.status_proxy is None:
+                self.status_proxy = Gio.DBusProxy.new_for_bus_sync(
+                    Gio.BusType.SYSTEM,
+                    Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES,
+                    None,
+                    BUS_NAME,
+                    OBJECT_PATH,
+                    INTERFACE_NAME,
+                    None,
+                )
+            result = self.status_proxy.call_sync(
+                "GetSynchronizationStatus",
+                None,
+                Gio.DBusCallFlags.NONE,
+                1000,
+                None,
+            )
+            self.server_connection_status.set_text(
+                synchronization_status_text(result.unpack()[0])
+            )
+        except GLib.Error:
+            self.status_proxy = None
+            self.server_connection_status.set_text("○ Serviço do agente indisponível")
+        return GLib.SOURCE_CONTINUE
+
     def _submit(self, _widget):
         if not self.controlled_user_confirmation.get_active():
             self.status.set_text("Confirme explicitamente a conta que será controlada.")
@@ -245,7 +288,9 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
         self.status.set_text(
             "Aguardando autorização administrativa e a primeira resposta do servidor…"
         )
-        self.server_connection_status.set_text("◌ Verificando comunicação com o servidor…")
+        self.server_connection_status.set_text(
+            synchronization_status_text("checking")
+        )
         worker = threading.Thread(
             target=self._configure_in_background,
             args=(configuration,),
@@ -269,12 +314,12 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
         self._update_submit_sensitivity()
         if error_message:
             self.status.set_text(error_message)
-            self.server_connection_status.set_text("○ Servidor não confirmado")
+            self._refresh_server_status()
             return GLib.SOURCE_REMOVE
         self.status.set_text(
             "Configuração concluída. O agente está ativo e o servidor respondeu com sucesso."
         )
-        self.server_connection_status.set_text("● Servidor online")
+        self._refresh_server_status()
         return GLib.SOURCE_REMOVE
 
 

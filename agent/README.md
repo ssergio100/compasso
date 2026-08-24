@@ -1,8 +1,9 @@
 # Agent
 
 O `tempo-agent` é o daemon privilegiado instalado no computador controlado. Ele
-avalia a última política local, contabiliza sessões gráficas e delega à sessão
-do usuário um pedido de logout normal quando uma regra bloquear o uso.
+avalia a última política local, contabiliza sessões gráficas e usa
+`loginctl lock-session` quando uma regra bloquear o uso, preservando os
+aplicativos abertos.
 
 ## Comportamento da fase 3
 
@@ -23,12 +24,9 @@ do usuário um pedido de logout normal quando uma regra bloquear o uso.
   agente tenta novamente.
 
 O requisito atual permite a autenticação. Quando a política continuar
-bloqueando, o agente espera a sessão gráfica ficar estabelecida antes de
-executar um helper no D-Bus do usuário. O helper descobre capacidades de logout
-normal sem consultar o nome do desktop e usa um adaptador compatível. Se nenhum
-adaptador aceitar a solicitação, o agente mantém a sessão aberta e registra o
-erro; ele não usa `loginctl terminate-session` como fallback. O retorno ao
-greeter sem tela preta ainda exige validação em máquinas reais.
+bloqueando, o agente espera a sessão gráfica ficar estabelecida e solicita o
+bloqueio de tela pelo logind. Não encerra a sessão e não usa
+`loginctl terminate-session` como fallback.
 
 ## Execução de desenvolvimento
 
@@ -51,6 +49,12 @@ Quando `server_url`, `device_id` e `device_token` estão configurados, o pacote
 são aplicadas por revisão e comandos são confirmados de forma durável. Se os
 três valores estiverem vazios ou o servidor estiver indisponível, o daemon
 continua aplicando integralmente o estado local.
+
+O heartbeat anuncia `X-Compasso-Protocol-Version: 2`. Em um bônus remoto, o
+agente persiste a nova âncora antes de registrar o comando como aplicado. O
+reconhecimento enviado no heartbeat seguinte significa, portanto, que o saldo
+autorizado já está durável; a data usada é a mesma data local enviada no
+heartbeat, inclusive perto da meia-noite.
 
 Uma sessão nova solicita ao servidor uma âncora com saldo confirmado. A
 identidade combina o namespace privado do ciclo do serviço e a sessão logind.

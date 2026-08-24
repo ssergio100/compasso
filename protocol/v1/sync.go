@@ -6,7 +6,11 @@ import (
 	"time"
 )
 
-const HeartbeatPath = "/api/v1/device/heartbeat"
+const (
+	HeartbeatPath          = "/api/v1/device/heartbeat"
+	VersionHeader          = "X-Compasso-Protocol-Version"
+	CurrentProtocolVersion = "2"
+)
 
 type HeartbeatRequest struct {
 	PolicyRevision         int64          `json:"policy_revision"`
@@ -89,6 +93,15 @@ type Command struct {
 type BonusPayload struct {
 	UUID      string    `json:"uuid,omitempty"`
 	LocalDate string    `json:"local_date"`
+	Seconds   int64     `json:"seconds"`
+	Origin    string    `json:"origin"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// CreditIncrementPayload adds credit to the daily balance active when the
+// command reaches the device. It deliberately has no calendar date.
+type CreditIncrementPayload struct {
+	UUID      string    `json:"uuid,omitempty"`
 	Seconds   int64     `json:"seconds"`
 	Origin    string    `json:"origin"`
 	CreatedAt time.Time `json:"created_at,omitempty"`

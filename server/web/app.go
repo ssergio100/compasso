@@ -27,6 +27,7 @@ type App struct {
 	adminOrigin   string
 	now           func() time.Time
 	handler       http.Handler
+	hub           *eventHub
 }
 
 // New creates an API-only HTTP application. The backend does not read, render
@@ -49,7 +50,7 @@ func New(
 	}
 	app := &App{
 		store: store, sessions: newSessionStore(sessionLifetime), secureCookies: secureCookies,
-		now: time.Now, onlineTimeout: onlineTimeout,
+		now: time.Now, onlineTimeout: onlineTimeout, hub: newEventHub(),
 	}
 	if err := app.SetAdminOrigin(adminOrigin); err != nil {
 		return nil, err
@@ -62,7 +63,7 @@ func New(
 	mux.HandleFunc("/api/v1/admin/setup", app.adminSetupAPI)
 	mux.HandleFunc("/api/v1/admin/devices", app.adminDevicesAPI)
 	mux.HandleFunc("/api/v1/admin/devices/", app.adminDeviceAPI)
-	app.handler = app.corsHeaders(securityHeaders(mux, secureCookies))
+	app.handler = app.corsHeaders(securityHeaders(app.logAdministrativeCommunication(mux), secureCookies))
 	return app, nil
 }
 

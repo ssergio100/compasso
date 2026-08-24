@@ -9,6 +9,23 @@ npm run dev
 
 Sem configuração, usa dados locais demonstrativos. Para consumir a API real, defina `VITE_COMPASSO_REMOTE=true` e `VITE_COMPASSO_API_BASE_URL`, ou use `COMPASSO_DEV_API_TARGET` como proxy de desenvolvimento.
 
+O arquivo `public/runtime-config.js` é copiado para o build e, por padrão,
+direciona a interface para a API no mesmo IP, porta `8181`. O bundle repete essa
+resolução automática como proteção caso o arquivo esteja ausente, vazio ou
+ainda utilize a grafia legada `apiBaseURL`. Uma implantação externa pode
+substituir `apiBaseUrl` pela URL pública correspondente.
+
+No modo remoto, tempo adicional permanece em **Sincronizando** sem alterar o
+contador localmente. O saldo é recarregado somente quando o agente reconhece o
+identificador da operação retornado pela API.
+
+A página **Comunicação** acompanha os intercâmbios entre agente, API e
+interface. Ela consulta somente registros novos a cada segundo, permite busca,
+filtros e inspeção de metadados sanitizados. A retenção é configurável entre 1
+e 90 dias na própria página; o servidor usa 30 dias por padrão e aceita até 365
+dias pela API. A exclusão manual afeta somente os logs do computador
+selecionado, sem remover histórico de uso, bônus ou configurações.
+
 ```bash
 npm run typecheck
 npm run build

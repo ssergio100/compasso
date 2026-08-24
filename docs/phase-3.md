@@ -1,5 +1,8 @@
 # Fase 3 — daemon systemd e sessões Linux
 
+> **Registro histórico:** esta fase originalmente encerrava a sessão. O agente
+> atual bloqueia a tela com `loginctl lock-session` e preserva os aplicativos.
+
 ## Escopo implementado
 
 - executável `tempo-agent` com encerramento limpo por `SIGTERM`/`SIGINT`;
@@ -7,14 +10,14 @@
 - descoberta de sessões gráficas locais pelo `systemd-logind` via `loginctl`;
 - contabilização monotônica somente durante uma sessão permitida;
 - checkpoint SQLite e divisão correta do consumo na virada do dia;
-- solicitação de logout ordenado ao gerenciador de cada sessão gráfica
+- solicitação de bloqueio ao logind para cada sessão gráfica
   controlada quando cota, rotina ou bloqueio manual impedir o uso;
 - a implementação original repetia imediatamente o encerramento para qualquer
   sessão que aparecesse durante o bloqueio; o teste real revelou que isso podia
   interromper a abertura do Plasma e deixar tela preta com cursor;
-- a correção aguarda o logind informar estado `active` e mais dez segundos de
-  estabilização antes de solicitar logout. KDE e GNOME são acionados por D-Bus
-  e não existe fallback para `loginctl terminate-session`;
+- a correção atual aguarda o logind informar estado `active` e solicita
+  `loginctl lock-session`; não existe fallback para
+  `loginctl terminate-session`;
 - unidade systemd sem dependência de rede e com reinício em falha.
 
 O agente e a unidade não contêm domínio, endereço de servidor nem regra de

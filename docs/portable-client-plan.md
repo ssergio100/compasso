@@ -1,5 +1,9 @@
 # Plano de adequação — cliente Linux instalável
 
+> **Registro histórico:** este plano acompanha os pilotos que usavam logout por
+> D-Bus. A implementação atual usa `loginctl lock-session`; consulte
+> `agent/README.md` para o comportamento vigente.
+
 ## Objetivo
 
 Entregar um cliente que uma pessoa comum consiga instalar sem compilador,

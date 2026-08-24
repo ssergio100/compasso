@@ -75,10 +75,13 @@ func run(configPath string, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
+	application.StartOfflineDetector(ctx)
 	server := &http.Server{
 		Addr: settings.ListenAddress, Handler: application,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		// WriteTimeout stays disabled so authenticated SSE streams stay open;
+		// every other endpoint is short-lived and bounded by the caller.
+		WriteTimeout: 0, IdleTimeout: 60 * time.Second,
 		MaxHeaderBytes: 32 << 10,
 	}
 	shutdownDone := make(chan error, 1)

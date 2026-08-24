@@ -52,6 +52,14 @@ func (a *App) loadDeviceLiveStatus(ctx context.Context, deviceID string) (storag
 	if err != nil {
 		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
 	}
+	unacknowledgedBonus, err := a.store.UnacknowledgedRemoteBonusSeconds(ctx, deviceID, localDate)
+	if err != nil {
+		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
+	}
+	summary.BonusSeconds -= unacknowledgedBonus
+	if summary.BonusSeconds < 0 {
+		summary.BonusSeconds = 0
+	}
 	localDay, err := time.Parse("2006-01-02", localDate)
 	if err != nil {
 		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err

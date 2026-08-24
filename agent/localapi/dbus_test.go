@@ -11,6 +11,15 @@ import (
 	"github.com/ssergio100/compasso/agent/storage"
 )
 
+type fakeSynchronization struct {
+	checked bool
+	online  bool
+}
+
+func (f *fakeSynchronization) SynchronizationStatus() (bool, bool) {
+	return f.checked, f.online
+}
+
 func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
@@ -28,7 +37,8 @@ func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, _ := localauth.NewService(store)
-	api, _ := newBonusAPI(service)
+	synchronization := &fakeSynchronization{}
+	api, _ := newBonusAPI(service, synchronization)
 	api.now = func() time.Time { return now }
 	if _, dbusErr := api.AddLocalBonus("anything", 900); dbusErr == nil || !strings.HasSuffix(dbusErr.Name, "PasswordNotConfigured") {
 		t.Fatalf("missing password D-Bus error=%v", dbusErr)
@@ -45,5 +55,21 @@ func TestBonusAPIMapsPasswordErrorsAndReturnsEventUUID(t *testing.T) {
 	uuid, dbusErr := api.AddLocalBonus("secret", 900)
 	if dbusErr != nil || uuid == "" {
 		t.Fatalf("correct password uuid=%q error=%v", uuid, dbusErr)
+	}
+}
+
+func TestSynchronizationStatusReflectsLiveSource(t *testing.T) {
+	synchronization := &fakeSynchronization{}
+	api := &bonusAPI{synchronization: synchronization}
+	if status, _ := api.GetSynchronizationStatus(); status != "checking" {
+		t.Fatalf("initial status=%q", status)
+	}
+	synchronization.checked = true
+	if status, _ := api.GetSynchronizationStatus(); status != "offline" {
+		t.Fatalf("offline status=%q", status)
+	}
+	synchronization.online = true
+	if status, _ := api.GetSynchronizationStatus(); status != "online" {
+		t.Fatalf("online status=%q", status)
 	}
 }

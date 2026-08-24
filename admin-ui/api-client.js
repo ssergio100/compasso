@@ -119,6 +119,9 @@
         method: "POST", body: { minutes }, mutatesState: true,
       });
     }
+    loadBonusStatus(deviceID, operationID) {
+      return this.request(`/api/v1/admin/devices/${deviceID}/commands/${operationID}`);
+    }
     queueCommand(deviceID, command) {
       return this.request(`/api/v1/admin/devices/${deviceID}/commands`, {
         method: "POST", body: { command }, mutatesState: true,

@@ -111,7 +111,7 @@ func TestCommandsRemainPendingUntilAcknowledged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.QueueRemoteBonus(ctx, device.ID, "2026-08-10", 600, now); err != nil {
+	if _, err := store.QueueRemoteBonus(ctx, device.ID, 600, now); err != nil {
 		t.Fatal(err)
 	}
 	request := protocol.HeartbeatRequest{PolicyRevision: 1, LocalDate: "2026-08-10"}

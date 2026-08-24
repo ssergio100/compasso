@@ -13,6 +13,7 @@ const (
 	AlertPrimary    = "primary"
 	AlertFiveMinute = "five_minute"
 	AlertOneMinute  = "one_minute"
+	minimumRearm    = 30 * time.Second
 )
 
 // Alert represents a planned notification event before a known block.
@@ -38,13 +39,13 @@ type Cycle struct {
 // Tracker emits each threshold once per authorization period. Its zero value
 // is ready for use and deliberately emits nothing on the first observation.
 type Tracker struct {
-	initialized       bool
-	active            bool
-	cycle             Cycle
-	reason            policy.Reason
-	previousCycle     time.Time
-	previousRemaining time.Duration
-	emitted           map[string]bool
+	initialized     bool
+	active          bool
+	cycle           Cycle
+	reason          policy.Reason
+	previousCycle   time.Time
+	previousBlockAt time.Time
+	emitted         map[string]bool
 }
 
 // Due returns thresholds crossed since the previous observation. When deliver
@@ -64,12 +65,14 @@ func (tracker *Tracker) Due(decision policy.Decision, warningMinutes int, cycle 
 	}
 
 	hasFutureBlock := decision.Allowed && !decision.NextBlockAt.IsZero()
+	blockWasMeaningfullyPostponed := !tracker.previousBlockAt.IsZero() &&
+		decision.NextBlockAt.Sub(tracker.previousBlockAt) >= minimumRearm
 	newCycle := !tracker.active || tracker.cycle != cycle || tracker.reason != decision.NextBlockReason ||
-		decision.Remaining > tracker.previousRemaining
+		blockWasMeaningfullyPostponed
 	if !hasFutureBlock {
 		tracker.active = false
 		tracker.previousCycle = now
-		tracker.previousRemaining = decision.Remaining
+		tracker.previousBlockAt = time.Time{}
 		return nil, nil
 	}
 	if newCycle {
@@ -78,7 +81,7 @@ func (tracker *Tracker) Due(decision policy.Decision, warningMinutes int, cycle 
 		return nil, nil
 	}
 
-	var dueAlerts []Alert
+	var mostUrgent *Alert
 	for _, plannedAlert := range plannedAlerts(decision, warningMinutes) {
 		crossed := plannedAlert.At.After(tracker.previousCycle) && !plannedAlert.At.After(now)
 		if crossed && !tracker.emitted[plannedAlert.Kind] {
@@ -86,11 +89,15 @@ func (tracker *Tracker) Due(decision policy.Decision, warningMinutes int, cycle 
 			if !deliver {
 				continue
 			}
-			dueAlerts = append(dueAlerts, plannedAlert)
+			current := plannedAlert
+			mostUrgent = &current
 		}
 	}
 	tracker.observe(decision, cycle, now)
-	return dueAlerts, nil
+	if mostUrgent == nil {
+		return nil, nil
+	}
+	return []Alert{*mostUrgent}, nil
 }
 
 func (tracker *Tracker) observe(decision policy.Decision, cycle Cycle, now time.Time) {
@@ -98,7 +105,7 @@ func (tracker *Tracker) observe(decision policy.Decision, cycle Cycle, now time.
 	tracker.cycle = cycle
 	tracker.reason = decision.NextBlockReason
 	tracker.previousCycle = now
-	tracker.previousRemaining = decision.Remaining
+	tracker.previousBlockAt = decision.NextBlockAt
 	if tracker.emitted == nil {
 		tracker.emitted = make(map[string]bool)
 	}

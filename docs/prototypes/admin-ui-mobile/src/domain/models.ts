@@ -60,7 +60,7 @@ export interface ClientOperation {
   label: string;
   status: OperationStatus;
   detail: string;
-	confirmation: "policy" | "pause" | "resume" | "block" | "unblock";
+	confirmation: "policy" | "bonus" | "pause" | "resume" | "block" | "unblock";
 }
 
 export type ClientOperations = Record<string, ClientOperation>;

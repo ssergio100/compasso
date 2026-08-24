@@ -1,4 +1,26 @@
-export type View = "now" | "limits" | "routines" | "administration";
+export type View = "now" | "limits" | "routines" | "administration" | "communication";
+
+export type CommunicationParty = "agent" | "api" | "interface";
+export type CommunicationResult = "success" | "warning" | "error";
+
+export interface CommunicationLog {
+  id: number;
+  device_id: string;
+  source: CommunicationParty;
+  target: CommunicationParty;
+  operation: string;
+  result: CommunicationResult;
+  http_status?: number;
+  duration_ms?: number;
+  summary: string;
+  details: Record<string, string>;
+  created_at: string;
+}
+
+export interface CommunicationResponse {
+  events: CommunicationLog[];
+  retention_days: number;
+}
 
 export interface Routine {
   id: string;
@@ -26,6 +48,17 @@ export interface Device {
   weekly_quota_seconds: number[];
   routines: Routine[];
   password_set: boolean;
+}
+
+export interface LiveStatus {
+  local_date: string;
+  today_quota_seconds: number;
+  bonus_seconds: number;
+  used_seconds: number;
+  remaining_seconds: number;
+  counting: boolean;
+  online: boolean;
+  graphical_session_active: boolean;
 }
 
 export interface Session { authenticated: boolean; login?: string; csrf_token: string; setup_required: boolean }

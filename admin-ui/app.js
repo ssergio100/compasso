@@ -24,6 +24,7 @@
   let issuedCredential = null;
   let counterTimer = null;
   let synchronizationTimer = null;
+  let pendingBonus = null;
 
   const escapeHTML = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -103,6 +104,12 @@
     const existingNotice = application.querySelector(".notice");
     if (existingNotice) existingNotice.remove();
     application.insertAdjacentHTML("afterbegin", noticeMarkup(message, "error"));
+  };
+
+  const showNotice = (message, kind = "success") => {
+    const existingNotice = application.querySelector(".notice");
+    if (existingNotice) existingNotice.remove();
+    application.insertAdjacentHTML("afterbegin", noticeMarkup(message, kind));
   };
 
   const renderLogin = (errorMessage = "") => {
@@ -309,7 +316,14 @@
     document.getElementById("bonus-form").addEventListener("submit", (event) => {
       event.preventDefault();
       const minutes = Number(new FormData(event.currentTarget).get("minutes"));
-      runAndRefresh(() => api.addBonus(deviceID, minutes), "Tempo extra enviado; aguardando sincronização.");
+      (async () => {
+        try {
+          const confirmation = await api.addBonus(deviceID, minutes);
+          pendingBonus = { deviceID, operationID: confirmation.operation_id };
+          showNotice("Tempo extra registrado. Sincronizando com o computador…");
+          await synchronizeLiveStatus();
+        } catch (error) { handleError(error); }
+      })();
     });
     document.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => {
       runAndRefresh(() => api.queueCommand(deviceID, button.dataset.command), "Comando enviado; será aplicado no próximo heartbeat.");
@@ -399,6 +413,23 @@
     }
   };
 
+  const synchronizeLiveStatus = async () => {
+    if (!currentDevice) return;
+    const deviceID = currentDevice.device.id;
+    try {
+      if (pendingBonus && pendingBonus.deviceID === deviceID) {
+        const operation = await api.loadBonusStatus(deviceID, pendingBonus.operationID);
+        if (!operation.acknowledged) return;
+        pendingBonus = null;
+        renderDevice(await api.loadDevice(deviceID), "Tempo extra sincronizado e disponível.");
+        return;
+      }
+      const incomingStatus = await api.loadStatus(deviceID);
+      currentDevice.status = window.CompassoAPI.mergeLiveStatus(currentDevice.status, incomingStatus);
+      updateStatusElements();
+    } catch (_error) { /* mantém o estado local e tenta novamente */ }
+  };
+
   const startLiveUpdates = () => {
     stopLiveUpdates();
     counterTimer = window.setInterval(() => {
@@ -408,18 +439,12 @@
         updateStatusElements();
       }
     }, 1000);
-    synchronizationTimer = window.setInterval(async () => {
-      if (!currentDevice) return;
-      try {
-        const incomingStatus = await api.loadStatus(currentDevice.device.id);
-        currentDevice.status = window.CompassoAPI.mergeLiveStatus(currentDevice.status, incomingStatus);
-        updateStatusElements();
-      } catch (_error) { /* mantém contagem local */ }
-    }, 2000);
+    synchronizationTimer = window.setInterval(synchronizeLiveStatus, 2000);
   };
 
   const loadDevice = async (deviceID) => {
     stopLiveUpdates();
+    if (pendingBonus && pendingBonus.deviceID !== deviceID) pendingBonus = null;
     if (!currentDevice || currentDevice.device.id !== deviceID) issuedCredential = null;
     showTopbar(true);
     try { renderDevice(await api.loadDevice(deviceID)); } catch (error) { handleError(error); }
