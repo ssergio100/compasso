@@ -50,6 +50,17 @@ export interface Device {
   password_set: boolean;
 }
 
+export interface LiveStatus {
+  local_date: string;
+  today_quota_seconds: number;
+  bonus_seconds: number;
+  used_seconds: number;
+  remaining_seconds: number;
+  counting: boolean;
+  online: boolean;
+  graphical_session_active: boolean;
+}
+
 export interface Session { authenticated: boolean; login?: string; csrf_token: string; setup_required: boolean }
 
 export interface DeviceResponse {

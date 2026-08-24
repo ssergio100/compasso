@@ -48,6 +48,9 @@ formato do comando e obtêm HTTP 426 enquanto houver um bônus incompatível
 pendente.
 
 Os metadados de comunicação ficam em uma tabela própria. Corpos HTTP,
-credenciais, cookies, senhas e tokens não são armazenados. A retenção padrão é
+credenciais, cookies, senhas e tokens não são armazenados; apenas parâmetros de
+negócio não sensíveis (minutos de bônus, tipo de comando, nome de rotina) são
+registrados para que a interface mostre, em linguagem clara, o que cada
+solicitação administrativa significou. A retenção padrão é
 de 30 dias; a limpeza ocorre automaticamente durante a entrada de novos
 registros e também imediatamente quando o administrador reduz o período.

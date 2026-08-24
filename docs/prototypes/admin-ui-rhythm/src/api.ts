@@ -61,6 +61,9 @@ class API {
   command(id: string, command: string) { return this.request(`/api/v1/admin/devices/${id}/commands`, { method: "POST", body: JSON.stringify({ command }) }, true); }
   bonus(id: string, minutes: number) { return this.request<{ message: string; operation_id: string }>(`/api/v1/admin/devices/${id}/bonus`, { method: "POST", body: JSON.stringify({ minutes }) }, true); }
   bonusStatus(id: string, operationId: string) { return this.request<{ acknowledged: boolean }>(`/api/v1/admin/devices/${id}/commands/${operationId}`); }
+  openStream(id: string): EventSource {
+    return new EventSource(`${this.base}/api/v1/admin/devices/${encodeURIComponent(id)}/stream`, { withCredentials: true });
+  }
   policy(id: string, weekly: number[], warning: number) { return this.request(`/api/v1/admin/devices/${id}/policy`, { method: "PUT", body: JSON.stringify({ weekly_quota_seconds: weekly, warning_minutes: warning }) }, true); }
   updatePassword(id: string, password: string, confirmation: string) { return this.request(`/api/v1/admin/devices/${id}/password`, { method: "PUT", body: JSON.stringify({ password, password_confirmation: confirmation }) }, true); }
   issueToken(id: string) { return this.request<{ device_id: string; device_token: string }>(`/api/v1/admin/devices/${id}/token`, { method: "POST" }, true); }

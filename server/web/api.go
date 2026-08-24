@@ -41,17 +41,19 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if status >= 400 {
 		summary = "Heartbeat rejeitado pela API."
 	}
-	_, _ = a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
+	heartbeatLog, _ := a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
 		DeviceID: deviceID, Source: "agent", Target: "api", Operation: "heartbeat",
 		Result: result, HTTPStatus: status, DurationMS: elapsedMilliseconds(started), Summary: summary,
 		Details: details,
 	}, a.now())
+	a.publishCommunicationLog(deviceID, heartbeatLog)
 	if status == http.StatusOK && heartbeatCarriedState(details) {
-		_, _ = a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
+		responseLog, _ := a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
 			DeviceID: deviceID, Source: "api", Target: "agent", Operation: "heartbeat_response",
 			Result: "success", HTTPStatus: status, DurationMS: elapsedMilliseconds(started),
 			Summary: "API enviou atualizações ou confirmações ao agente.", Details: details,
 		}, a.now())
+		a.publishCommunicationLog(deviceID, responseLog)
 	}
 }
 
@@ -133,6 +135,7 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 	details["session_state_sent"] = strconv.FormatBool(response.SessionState != nil)
 	details["response_commands"] = strconv.Itoa(len(response.Commands))
 	details["acknowledged_events"] = strconv.Itoa(len(response.AcknowledgedEvents))
+	a.publishDeviceStatus(deviceID, "status")
 	_ = json.NewEncoder(w).Encode(response)
 }
 

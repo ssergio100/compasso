@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +9,33 @@ import (
 
 	"github.com/ssergio100/compasso/server/storage"
 )
+
+// communicationDetails carries business context about an administrative
+// request (bonus minutes, command, routine name...) from the handler to the
+// logging middleware. Only non-sensitive values are stored; the storage
+// validator rejects credential-like keys.
+type communicationDetails struct {
+	values map[string]string
+}
+
+type communicationDetailsKey struct{}
+
+func communicationDetailsContext(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), communicationDetailsKey{}, &communicationDetails{values: map[string]string{}}))
+}
+
+func addCommunicationDetail(r *http.Request, key, value string) {
+	if details, ok := r.Context().Value(communicationDetailsKey{}).(*communicationDetails); ok {
+		details.values[key] = value
+	}
+}
+
+func extraCommunicationDetails(r *http.Request) map[string]string {
+	if details, ok := r.Context().Value(communicationDetailsKey{}).(*communicationDetails); ok {
+		return details.values
+	}
+	return nil
+}
 
 type statusCapturingResponseWriter struct {
 	http.ResponseWriter
@@ -48,18 +76,24 @@ func (a *App) logAdministrativeCommunication(next http.Handler) http.Handler {
 			w.Header().Set("X-Compasso-Correlation-ID", correlationID)
 		}
 		recorder := &statusCapturingResponseWriter{ResponseWriter: w}
-		next.ServeHTTP(recorder, r)
+		wrapped := communicationDetailsContext(r)
+		next.ServeHTTP(recorder, wrapped)
 		status := recorder.statusCode()
-		_, _ = a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
+		details := map[string]string{
+			"correlation_id": correlationID,
+			"method":         r.Method,
+			"route":          route,
+		}
+		for key, value := range extraCommunicationDetails(wrapped) {
+			details[key] = value
+		}
+		stored, _ := a.store.AppendCommunicationLog(r.Context(), storage.CommunicationLog{
 			DeviceID: deviceID, Source: "interface", Target: "api", Operation: operation,
 			Result: communicationResultForStatus(status), HTTPStatus: status,
 			DurationMS: elapsedMilliseconds(started), Summary: administrativeCommunicationSummary(operation, status),
-			Details: map[string]string{
-				"correlation_id": correlationID,
-				"method":         r.Method,
-				"route":          route,
-			},
+			Details: details,
 		}, a.now())
+		a.publishCommunicationLog(deviceID, stored)
 	})
 }
 
@@ -77,7 +111,7 @@ func administrativeCommunication(r *http.Request) (deviceID, operation, route st
 	if len(parts) > 1 {
 		resource = parts[1]
 	}
-	if resource == "communication" {
+	if resource == "communication" || resource == "stream" {
 		return "", "", "", false
 	}
 	operation = r.Method + " " + resource

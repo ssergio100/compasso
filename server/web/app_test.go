@@ -614,6 +614,49 @@ func TestAdministrativeCommunicationLogsCanBeConfiguredAndDeleted(t *testing.T) 
 	}
 }
 
+func TestCommunicationLogIncludesBusinessDetails(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+	device, err := fixture.store.CreateDevice(context.Background(), "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devicePath := "/api/v1/admin/devices/" + device.ID
+	bonusResponse := fixture.requestJSON(http.MethodPost, devicePath+"/bonus", addAdminBonusRequest{Minutes: 30}, true)
+	if bonusResponse.Code != http.StatusAccepted {
+		t.Fatalf("bonus status=%d body=%s", bonusResponse.Code, bonusResponse.Body.String())
+	}
+	commandResponse := fixture.requestJSON(http.MethodPost, devicePath+"/commands", queueAdminCommandRequest{Command: "pause_monitoring"}, true)
+	if commandResponse.Code != http.StatusAccepted {
+		t.Fatalf("command status=%d body=%s", commandResponse.Code, commandResponse.Body.String())
+	}
+	listingResponse := fixture.requestJSON(http.MethodGet, devicePath+"/communication", nil, false)
+	if listingResponse.Code != http.StatusOK {
+		t.Fatalf("communication status=%d body=%s", listingResponse.Code, listingResponse.Body.String())
+	}
+	var listing struct {
+		Events []serverstorage.CommunicationLog `json:"events"`
+	}
+	decodeResponse(t, listingResponse, &listing)
+	var bonus, command *serverstorage.CommunicationLog
+	for i := range listing.Events {
+		event := &listing.Events[i]
+		switch event.Operation {
+		case "POST bonus":
+			bonus = event
+		case "POST commands":
+			command = event
+		}
+	}
+	if bonus == nil || bonus.Details["bonus_minutes"] != "30" {
+		t.Fatalf("bonus log=%+v", bonus)
+	}
+	if command == nil || command.Details["command"] != "pause_monitoring" {
+		t.Fatalf("command log=%+v", command)
+	}
+}
+
 type testContext interface {
 	Helper()
 	TempDir() string

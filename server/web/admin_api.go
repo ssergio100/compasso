@@ -357,6 +357,8 @@ func (a *App) adminDeviceAPI(w http.ResponseWriter, r *http.Request) {
 	switch pathParts[1] {
 	case "status":
 		a.adminDeviceStatusAPI(w, r, deviceID)
+	case "stream":
+		a.adminDeviceStreamAPI(w, r, deviceID)
 	case "policy":
 		a.adminDevicePolicyAPI(w, r, current, deviceID)
 	case "routines":
@@ -418,6 +420,7 @@ func (a *App) adminDeviceRootAPI(w http.ResponseWriter, r *http.Request, current
 			writeAdminMutationError(w, err)
 			return
 		}
+		addCommunicationDetail(r, "device_name", request.Name)
 		writeJSON(w, http.StatusOK, map[string]string{"message": "device renamed"})
 	case http.MethodDelete:
 		if !requireAdminCSRF(w, r, current) {
@@ -427,6 +430,7 @@ func (a *App) adminDeviceRootAPI(w http.ResponseWriter, r *http.Request, current
 			writeAdminMutationError(w, err)
 			return
 		}
+		addCommunicationDetail(r, "action", "device_deleted")
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
@@ -465,6 +469,7 @@ func (a *App) adminDevicePolicyAPI(w http.ResponseWriter, r *http.Request, curre
 		writeAdminMutationError(w, err)
 		return
 	}
+	addCommunicationDetail(r, "warning_minutes", strconv.Itoa(request.WarningMinutes))
 	writeJSON(w, http.StatusOK, map[string]string{"message": "policy updated"})
 }
 
@@ -489,6 +494,7 @@ func (a *App) adminDeviceRoutinesAPI(w http.ResponseWriter, r *http.Request, cur
 			writeAdminMutationError(w, err)
 			return
 		}
+		addCommunicationDetail(r, "routine_action", "deleted")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -518,6 +524,12 @@ func (a *App) adminDeviceRoutinesAPI(w http.ResponseWriter, r *http.Request, cur
 	if routineID == "" {
 		status = http.StatusCreated
 	}
+	action := "updated"
+	if status == http.StatusCreated {
+		action = "created"
+	}
+	addCommunicationDetail(r, "routine_name", request.Name)
+	addCommunicationDetail(r, "routine_action", action)
 	writeJSON(w, status, map[string]string{"id": createdRoutineID})
 }
 
@@ -544,6 +556,7 @@ func (a *App) adminDevicePasswordAPI(w http.ResponseWriter, r *http.Request, cur
 		writeAdminMutationError(w, err)
 		return
 	}
+	addCommunicationDetail(r, "action", "password_updated")
 	writeJSON(w, http.StatusOK, map[string]string{"message": "password updated"})
 }
 
@@ -561,6 +574,7 @@ func (a *App) adminDeviceTokenAPI(w http.ResponseWriter, r *http.Request, curren
 			writeAdminMutationError(w, err)
 			return
 		}
+		addCommunicationDetail(r, "action", "token_revoked")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -569,6 +583,7 @@ func (a *App) adminDeviceTokenAPI(w http.ResponseWriter, r *http.Request, curren
 		writeAdminMutationError(w, err)
 		return
 	}
+	addCommunicationDetail(r, "action", "token_issued")
 	writeJSON(w, http.StatusCreated, map[string]string{"device_id": deviceID, "device_token": token})
 }
 
@@ -593,6 +608,7 @@ func (a *App) adminDeviceBonusAPI(w http.ResponseWriter, r *http.Request, curren
 		writeAdminMutationError(w, err)
 		return
 	}
+	addCommunicationDetail(r, "bonus_minutes", strconv.Itoa(request.Minutes))
 	writeJSON(w, http.StatusAccepted, adminBonusResponse{
 		Message: "bonus queued", OperationID: operationID,
 	})
@@ -629,6 +645,7 @@ func (a *App) adminDeviceCommandAPI(w http.ResponseWriter, r *http.Request, curr
 		writeAdminMutationError(w, err)
 		return
 	}
+	addCommunicationDetail(r, "command", request.Command)
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": "command queued"})
 }
 
