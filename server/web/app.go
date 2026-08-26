@@ -20,14 +20,15 @@ const (
 )
 
 type App struct {
-	store         *storage.Store
-	sessions      *sessionStore
-	secureCookies bool
-	onlineTimeout time.Duration
-	adminOrigin   string
-	now           func() time.Time
-	handler       http.Handler
-	hub           *eventHub
+	store             *storage.Store
+	sessions          *sessionStore
+	secureCookies     bool
+	onlineTimeout     time.Duration
+	heartbeatInterval time.Duration
+	adminOrigin       string
+	now               func() time.Time
+	handler           http.Handler
+	hub               *eventHub
 }
 
 // New creates an API-only HTTP application. The backend does not read, render
@@ -37,6 +38,7 @@ func New(
 	secureCookies bool,
 	sessionLifetime time.Duration,
 	onlineTimeout time.Duration,
+	heartbeatInterval time.Duration,
 	adminOrigin string,
 ) (*App, error) {
 	if store == nil {
@@ -48,9 +50,12 @@ func New(
 	if onlineTimeout <= 0 {
 		return nil, errors.New("online timeout must be positive")
 	}
+	if heartbeatInterval < time.Second || heartbeatInterval > 10*time.Minute || heartbeatInterval%time.Second != 0 {
+		return nil, errors.New("heartbeat interval must be a whole number of seconds between 1 second and 10 minutes")
+	}
 	app := &App{
 		store: store, sessions: newSessionStore(sessionLifetime), secureCookies: secureCookies,
-		now: time.Now, onlineTimeout: onlineTimeout, hub: newEventHub(),
+		now: time.Now, onlineTimeout: onlineTimeout, heartbeatInterval: heartbeatInterval, hub: newEventHub(),
 	}
 	if err := app.SetAdminOrigin(adminOrigin); err != nil {
 		return nil, err

@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	HeartbeatPath          = "/api/v1/device/heartbeat"
-	VersionHeader          = "X-Compasso-Protocol-Version"
-	CurrentProtocolVersion = "2"
+	HeartbeatPath           = "/api/v1/device/heartbeat"
+	VersionHeader           = "X-Compasso-Protocol-Version"
+	CapabilitiesHeader      = "X-Compasso-Capabilities"
+	NextHeartbeatCapability = "next-heartbeat-seconds"
+	CurrentProtocolVersion  = "2"
 )
 
 type HeartbeatRequest struct {
@@ -36,12 +38,13 @@ type PendingEvent struct {
 type jsonRaw = json.RawMessage
 
 type HeartbeatResponse struct {
-	ServerTime         time.Time     `json:"server_time"`
-	AcknowledgedEvents []string      `json:"acknowledged_events,omitempty"`
-	Policy             *Policy       `json:"policy,omitempty"`
-	SessionState       *SessionState `json:"session_state,omitempty"`
-	Commands           []Command     `json:"commands,omitempty"`
-	Control            Control       `json:"control"`
+	ServerTime           time.Time     `json:"server_time"`
+	NextHeartbeatSeconds int64         `json:"next_heartbeat_seconds,omitempty"`
+	AcknowledgedEvents   []string      `json:"acknowledged_events,omitempty"`
+	Policy               *Policy       `json:"policy,omitempty"`
+	SessionState         *SessionState `json:"session_state,omitempty"`
+	Commands             []Command     `json:"commands,omitempty"`
+	Control              Control       `json:"control"`
 }
 
 // Control is online-only authority and must be discarded after heartbeat failure.

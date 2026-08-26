@@ -6,7 +6,7 @@
 
 ### Direção arquitetural
 
-- Aplicar somente à interface vigente `admin-ui-rhythm`.
+- Aplicar somente à interface vigente `admin-ui`.
 - Manter REST para carga inicial, consultas e comandos do usuário.
 - Usar SSE para mudanças enviadas pelo servidor à interface.
 - Criar um barramento de eventos em memória no `compasso-api`; produtores de

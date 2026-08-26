@@ -70,7 +70,8 @@ func run(configPath string, logger *log.Logger) error {
 		}
 	}
 	application, err := web.New(
-		store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout, settings.AdminOrigin,
+		store, settings.SecureCookies, settings.SessionLifetime, settings.OnlineTimeout,
+		settings.HeartbeatInterval, settings.AdminOrigin,
 	)
 	if err != nil {
 		return err

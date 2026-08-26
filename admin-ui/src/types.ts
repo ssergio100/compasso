@@ -1,4 +1,8 @@
 export type View = "now" | "limits" | "routines" | "administration" | "communication";
+export type AvatarKey = "cat" | "dog" | "fox" | "rabbit" | "panda" | "owl" | "penguin" | "capybara" | "cat_bow" | "rabbit_flower" | "panda_flower" | "fox_bow";
+export type RoutineIconKey = "study" | "reading" | "sleep" | "bath" | "meal" | "school" | "exercise" | "chores" | "family" | "music" | "outdoor" | "general";
+export type ActualState = "offline" | "blocked" | "unblocked";
+export type ControlStatus = "offline" | "pause_requested" | "paused" | "block_requested" | "blocked" | "active";
 
 export type CommunicationParty = "agent" | "api" | "interface";
 export type CommunicationResult = "success" | "warning" | "error";
@@ -58,15 +62,19 @@ export interface Routine {
   start_second: number;
   end_second: number;
   enabled: boolean;
+  icon_key?: RoutineIconKey;
 }
 
 export interface Device {
   id: string;
   name: string;
+  avatar_key?: AvatarKey;
   online: boolean;
   graphical_session_active: boolean;
   monitoring_paused: boolean;
   manual_block: boolean;
+  actual_state: ActualState;
+  control_status: ControlStatus;
   counting: boolean;
   used_seconds: number;
   remaining_seconds: number;
@@ -88,12 +96,14 @@ export interface LiveStatus {
   counting: boolean;
   online: boolean;
   graphical_session_active: boolean;
+  actual_state: ActualState;
+  control_status: ControlStatus;
 }
 
 export interface Session { authenticated: boolean; login?: string; csrf_token: string; setup_required: boolean }
 
 export interface DeviceResponse {
-  id: string; name: string; last_seen_at: string | null; policy_revision: number; applied_policy_revision: number;
+  id: string; name: string; avatar_key?: AvatarKey; last_seen_at: string | null; policy_revision: number; applied_policy_revision: number;
   graphical_session_active: boolean; online: boolean;
 }
 
@@ -101,5 +111,5 @@ export interface DeviceDetailResponse {
   device: DeviceResponse;
   policy: { revision: number; monitoring_paused: boolean; manual_block: boolean; warning_minutes: number; password_set: boolean; weekly_quota_seconds: number[]; routines: Routine[] };
   control: { revision: number; monitoring_paused: boolean; manual_block: boolean };
-  status: { today_quota_seconds: number; bonus_seconds: number; used_seconds: number; remaining_seconds: number; counting: boolean; online: boolean; graphical_session_active: boolean };
+  status: { today_quota_seconds: number; bonus_seconds: number; used_seconds: number; remaining_seconds: number; counting: boolean; online: boolean; graphical_session_active: boolean; actual_state: ActualState; control_status: ControlStatus };
 }

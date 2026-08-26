@@ -63,7 +63,7 @@ for script_name in "${server_scripts[@]}"; do
 done
 install -m 0644 "${project_root}/docs/server-installation.md" \
   "${application_root}/README.md"
-install -m 0644 "${project_root}/docs/server-compose-plan.md" \
+install -m 0644 "${project_root}/docs/atualizacao-manual-servidor.md" \
   "${application_root}/docs/"
 
 package_path="${project_root}/dist/compasso-server_${package_version}_${package_architecture}.deb"

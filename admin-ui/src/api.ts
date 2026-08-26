@@ -1,11 +1,13 @@
-import type { CommunicationResponse, Device, DeviceActivitiesResponse, DeviceDetailResponse, DeviceResponse, Routine, Session } from "./types";
+import type { AvatarKey, CommunicationResponse, Device, DeviceActivitiesResponse, DeviceDetailResponse, DeviceResponse, Routine, Session } from "./types";
+import { defaultAvatarKey, inferRoutineIcon, isAvatarKey, isRoutineIconKey } from "./visuals";
 
 const productionAPIBase = import.meta.env.PROD
   ? `${window.location.protocol}//${window.location.hostname}:8181`
   : "";
 const runtimeBase = (window.COMPASSO_CONFIG?.apiBaseUrl ?? window.COMPASSO_CONFIG?.apiBaseURL ?? "").trim();
 const envBase = (import.meta.env.VITE_COMPASSO_API_BASE_URL ?? "").trim();
-export const remoteMode = import.meta.env.VITE_COMPASSO_REMOTE === "true" || Boolean(runtimeBase || envBase || productionAPIBase);
+const visualPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "visuals";
+export const remoteMode = !visualPreview && (import.meta.env.VITE_COMPASSO_REMOTE === "true" || Boolean(runtimeBase || envBase || productionAPIBase));
 
 function normalizedDays(value: unknown): Routine["days"] {
   const days = Array.isArray(value) ? value : [];
@@ -14,13 +16,15 @@ function normalizedDays(value: unknown): Routine["days"] {
 
 function normalizedRoutines(value: unknown): Routine[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((routine): routine is Routine => Boolean(routine && typeof routine === "object")).map((routine) => ({
-    id: String(routine.id ?? ""), name: String(routine.name ?? "Rotina"),
-    days: normalizedDays(routine.days),
-    start_second: Number.isFinite(Number(routine.start_second)) ? Number(routine.start_second) : 0,
-    end_second: Number.isFinite(Number(routine.end_second)) ? Number(routine.end_second) : 0,
-    enabled: Boolean(routine.enabled),
-  }));
+  return value.filter((routine): routine is Routine => Boolean(routine && typeof routine === "object")).map((routine) => {
+    const name = String(routine.name ?? "Rotina");
+    return {
+      id: String(routine.id ?? ""), name, days: normalizedDays(routine.days),
+      start_second: Number.isFinite(Number(routine.start_second)) ? Number(routine.start_second) : 0,
+      end_second: Number.isFinite(Number(routine.end_second)) ? Number(routine.end_second) : 0,
+      enabled: Boolean(routine.enabled), icon_key: isRoutineIconKey(routine.icon_key) ? routine.icon_key : inferRoutineIcon(name),
+    };
+  });
 }
 
 function normalizedWeeklyQuota(value: unknown): number[] {
@@ -60,10 +64,12 @@ class API {
   private async device(id: string): Promise<Device> {
     const detail = await this.request<DeviceDetailResponse>(`/api/v1/admin/devices/${id}`);
     return {
-      id: detail.device.id, name: detail.device.name,
+      id: detail.device.id, name: detail.device.name, avatar_key: isAvatarKey(detail.device.avatar_key) ? detail.device.avatar_key : defaultAvatarKey(detail.device.id),
       online: detail.status.online,
       graphical_session_active: detail.status.graphical_session_active,
       monitoring_paused: detail.control.monitoring_paused, manual_block: detail.control.manual_block,
+      actual_state: detail.status.actual_state ?? (detail.status.online ? "unblocked" : "offline"),
+      control_status: detail.status.control_status ?? (!detail.status.online ? "offline" : detail.control.monitoring_paused ? "paused" : detail.control.manual_block ? "blocked" : "active"),
       counting: detail.status.counting, used_seconds: detail.status.used_seconds,
       remaining_seconds: detail.status.remaining_seconds, bonus_seconds: detail.status.bonus_seconds,
       today_quota_seconds: detail.status.today_quota_seconds, warning_minutes: detail.policy.warning_minutes,
@@ -76,9 +82,9 @@ class API {
     return Promise.all(list.devices.map((summary) => this.device(summary.id)));
   }
   loadDevice(id: string) { return this.device(id); }
-  createDevice(name: string) { return this.request<DeviceResponse>("/api/v1/admin/devices", { method: "POST", body: JSON.stringify({ name }) }, true); }
+  createDevice(name: string, avatarKey: AvatarKey) { return this.request<DeviceResponse>("/api/v1/admin/devices", { method: "POST", body: JSON.stringify({ name, avatar_key: avatarKey }) }, true); }
   deleteDevice(id: string) { return this.request<void>(`/api/v1/admin/devices/${id}`, { method: "DELETE" }, true); }
-  rename(id: string, name: string) { return this.request(`/api/v1/admin/devices/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }, true); }
+  rename(id: string, name: string, avatarKey: AvatarKey) { return this.request(`/api/v1/admin/devices/${id}`, { method: "PATCH", body: JSON.stringify({ name, avatar_key: avatarKey }) }, true); }
   command(id: string, command: string) { return this.request<{ message: string; operation_id: string }>(`/api/v1/admin/devices/${id}/commands`, { method: "POST", body: JSON.stringify({ command }) }, true); }
   bonus(id: string, minutes: number) { return this.request<{ message: string; operation_id: string }>(`/api/v1/admin/devices/${id}/bonus`, { method: "POST", body: JSON.stringify({ minutes }) }, true); }
   activities(id: string) { return this.request<DeviceActivitiesResponse>(`/api/v1/admin/devices/${id}/activities?limit=100`); }

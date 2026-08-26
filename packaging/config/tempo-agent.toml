@@ -10,5 +10,6 @@ loginctl_path = "/usr/bin/loginctl"
 server_url = ""
 device_id = ""
 device_token = ""
-heartbeat_interval = "10s"
+# Legado: aceito em atualizações, mas o servidor orienta o ciclo normal.
+heartbeat_interval = "3s"
 http_timeout = "8s"

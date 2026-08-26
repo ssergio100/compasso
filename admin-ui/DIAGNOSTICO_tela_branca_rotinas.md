@@ -1,6 +1,6 @@
 # Diagnóstico — tela branca ao criar rotina
 
-**Protótipo:** `admin-ui-rhythm`
+**Interface:** `admin-ui`
 **Fluxo:** Rotinas → Nova rotina → **Criar rotina**
 **Sintoma:** a tela fica totalmente branca após o cadastro, embora a rotina seja persistida no servidor.
 

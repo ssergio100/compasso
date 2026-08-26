@@ -18,7 +18,7 @@ build-server:
 	go build -o bin/tempo-server ./server/cmd/tempo-server
 
 admin-ui-dev:
-	cd docs/prototypes/admin-ui-rhythm && npm run dev
+	cd admin-ui && npm run dev
 
 package-client: package-deb
 
@@ -61,8 +61,8 @@ test-ui:
 	cd local-ui && python3 -m unittest discover -v
 
 test-admin-ui:
-	cd docs/prototypes/admin-ui-rhythm && npm run typecheck
-	cd docs/prototypes/admin-ui-rhythm && npm run build
+	cd admin-ui && npm run typecheck
+	cd admin-ui && npm run build
 
 test-migrations:
 	./scripts/test-migrations.sh

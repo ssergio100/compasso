@@ -22,6 +22,7 @@ type Admin struct {
 type Device struct {
 	ID                     string
 	Name                   string
+	AvatarKey              string
 	LastSeenAt             *time.Time
 	PolicyRevision         int64
 	AppliedPolicyRevision  int64
@@ -70,11 +71,31 @@ func (s *Store) LoadControl(ctx context.Context, deviceID string) (Control, erro
 type Routine struct {
 	ID      string
 	Name    string
+	IconKey string
 	Days    [7]bool
 	Start   int64
 	End     int64
 	Enabled bool
 }
+
+const (
+	DefaultAvatarKey      = "cat"
+	DefaultRoutineIconKey = "general"
+)
+
+var validAvatarKeys = map[string]bool{
+	"cat": true, "dog": true, "fox": true, "rabbit": true, "panda": true, "owl": true,
+	"penguin": true, "capybara": true, "cat_bow": true, "rabbit_flower": true,
+	"panda_flower": true, "fox_bow": true,
+}
+
+var validRoutineIconKeys = map[string]bool{
+	"study": true, "reading": true, "sleep": true, "bath": true, "meal": true, "school": true,
+	"exercise": true, "chores": true, "family": true, "music": true, "outdoor": true, "general": true,
+}
+
+func ValidAvatarKey(value string) bool      { return validAvatarKeys[value] }
+func ValidRoutineIconKey(value string) bool { return validRoutineIconKeys[value] }
 
 type RoutineConflictError struct {
 	RoutineName string
@@ -155,8 +176,15 @@ func (s *Store) AdminByLogin(ctx context.Context, login string) (Admin, error) {
 }
 
 func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (Device, error) {
+	return s.CreateDeviceWithAvatar(ctx, name, DefaultAvatarKey, now)
+}
+
+func (s *Store) CreateDeviceWithAvatar(ctx context.Context, name, avatarKey string, now time.Time) (Device, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 80 || now.IsZero() {
+	if avatarKey == "" {
+		avatarKey = DefaultAvatarKey
+	}
+	if name == "" || len(name) > 80 || !ValidAvatarKey(avatarKey) || now.IsZero() {
 		return Device{}, errors.New("device requires a name of at most 80 characters and current time")
 	}
 	id, err := newID()
@@ -170,8 +198,8 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 	defer tx.Rollback()
 	stamp := formatTime(now)
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO device(id, name, device_token_hash, policy_revision, created_at, updated_at)
-		VALUES (?, ?, '', 1, ?, ?)`, id, name, stamp, stamp); err != nil {
+		INSERT INTO device(id, name, avatar_key, device_token_hash, policy_revision, created_at, updated_at)
+		VALUES (?, ?, ?, '', 1, ?, ?)`, id, name, avatarKey, stamp, stamp); err != nil {
 		return Device{}, fmt.Errorf("create device: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -194,12 +222,12 @@ func (s *Store) CreateDevice(ctx context.Context, name string, now time.Time) (D
 	if err := tx.Commit(); err != nil {
 		return Device{}, err
 	}
-	return Device{ID: id, Name: name, PolicyRevision: 1, CreatedAt: now}, nil
+	return Device{ID: id, Name: name, AvatarKey: avatarKey, PolicyRevision: 1, CreatedAt: now}, nil
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
+		SELECT id, name, avatar_key, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
 		       graphical_session_active, graphical_session_locked, graphical_session_id, created_at
 		FROM device ORDER BY name, id`)
 	if err != nil {
@@ -214,7 +242,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 		var graphicalSessionActive int
 		var graphicalSessionLocked int
 		var created string
-		if err := rows.Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+		if err := rows.Scan(&device.ID, &device.Name, &device.AvatarKey, &lastSeen, &device.PolicyRevision,
 			&device.AppliedPolicyRevision, &device.AppliedControlRevision, &graphicalSessionActive,
 			&graphicalSessionLocked, &graphicalSessionID, &created); err != nil {
 			return nil, err
@@ -246,10 +274,10 @@ func (s *Store) LoadDevice(ctx context.Context, id string) (Device, Policy, erro
 	var graphicalSessionLocked int
 	var created string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
+		SELECT id, name, avatar_key, last_seen_at, policy_revision, applied_policy_revision, applied_control_revision,
 		       graphical_session_active, graphical_session_locked, graphical_session_id, created_at
 		FROM device WHERE id=?`, id,
-	).Scan(&device.ID, &device.Name, &lastSeen, &device.PolicyRevision,
+	).Scan(&device.ID, &device.Name, &device.AvatarKey, &lastSeen, &device.PolicyRevision,
 		&device.AppliedPolicyRevision, &device.AppliedControlRevision, &graphicalSessionActive,
 		&graphicalSessionLocked, &graphicalSessionID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -292,6 +320,30 @@ func (s *Store) RenameDevice(ctx context.Context, id, name string, now time.Time
 		return ErrNotFound
 	}
 	if err := insertAudit(ctx, tx, id, "device_renamed", map[string]interface{}{"name": name}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) UpdateDeviceIdentity(ctx context.Context, id, name, avatarKey string, now time.Time) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 80 || !ValidAvatarKey(avatarKey) {
+		return errors.New("invalid device identity")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE device SET name=?, avatar_key=?, updated_at=? WHERE id=?`, name, avatarKey, formatTime(now), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return ErrNotFound
+	}
+	if err := insertAudit(ctx, tx, id, "device_identity_updated", map[string]interface{}{"name": name, "avatar_key": avatarKey}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -342,7 +394,7 @@ func (s *Store) SaveQuotas(ctx context.Context, deviceID string, quotas [7]int64
 
 func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routine, now time.Time) (string, error) {
 	routine.Name = strings.TrimSpace(routine.Name)
-	if routine.Name == "" || len(routine.Name) > 80 || routine.Start < 0 || routine.Start >= 86400 || routine.End < 0 || routine.End >= 86400 {
+	if routine.Name == "" || len(routine.Name) > 80 || routine.Start < 0 || routine.Start >= 86400 || routine.End < 0 || routine.End >= 86400 || routine.IconKey != "" && !ValidRoutineIconKey(routine.IconKey) {
 		return "", errors.New("routine has invalid name or time")
 	}
 	selected := false
@@ -366,13 +418,17 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 	}
 	defer tx.Rollback()
 	if !isNew {
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM routine WHERE id=? AND device_id=?`, routine.ID, deviceID).Scan(&count); err != nil {
+		var existingIconKey string
+		if err := tx.QueryRowContext(ctx, `SELECT icon_key FROM routine WHERE id=? AND device_id=?`, routine.ID, deviceID).Scan(&existingIconKey); errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		} else if err != nil {
 			return "", err
 		}
-		if count == 0 {
-			return "", ErrNotFound
+		if routine.IconKey == "" {
+			routine.IconKey = existingIconKey
 		}
+	} else if routine.IconKey == "" {
+		routine.IconKey = DefaultRoutineIconKey
 	}
 	existing, err := loadRoutines(ctx, tx, deviceID)
 	if err != nil {
@@ -384,11 +440,11 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO routine(id, device_id, name, start_second, end_second, enabled)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO routine(id, device_id, name, icon_key, start_second, end_second, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name, start_second=excluded.start_second,
-		end_second=excluded.end_second, enabled=excluded.enabled
-		WHERE routine.device_id=excluded.device_id`, routine.ID, deviceID, routine.Name, routine.Start, routine.End, boolInt(routine.Enabled)); err != nil {
+		end_second=excluded.end_second, enabled=excluded.enabled, icon_key=excluded.icon_key
+		WHERE routine.device_id=excluded.device_id`, routine.ID, deviceID, routine.Name, routine.IconKey, routine.Start, routine.End, boolInt(routine.Enabled)); err != nil {
 		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM routine_day WHERE routine_id=?`, routine.ID); err != nil {
@@ -410,7 +466,7 @@ func (s *Store) SaveRoutine(ctx context.Context, deviceID string, routine Routin
 		action = "created"
 	}
 	if err := insertAudit(ctx, tx, deviceID, "routine_saved", map[string]interface{}{
-		"routine_id": routine.ID, "name": routine.Name, "revision": revision, "action": action,
+		"routine_id": routine.ID, "name": routine.Name, "icon_key": routine.IconKey, "revision": revision, "action": action,
 	}, now); err != nil {
 		return "", err
 	}
@@ -426,7 +482,7 @@ type queryer interface {
 
 func loadRoutines(ctx context.Context, q queryer, deviceID string) ([]Routine, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT r.id, r.name, r.start_second, r.end_second, r.enabled, rd.weekday
+		SELECT r.id, r.name, r.icon_key, r.start_second, r.end_second, r.enabled, rd.weekday
 		FROM routine r LEFT JOIN routine_day rd ON rd.routine_id=r.id
 		WHERE r.device_id=? ORDER BY r.id`, deviceID)
 	if err != nil {
@@ -436,18 +492,18 @@ func loadRoutines(ctx context.Context, q queryer, deviceID string) ([]Routine, e
 	var routines []Routine
 	indexes := make(map[string]int)
 	for rows.Next() {
-		var id, name string
+		var id, name, iconKey string
 		var start, end int64
 		var enabled int
 		var weekday sql.NullInt64
-		if err := rows.Scan(&id, &name, &start, &end, &enabled, &weekday); err != nil {
+		if err := rows.Scan(&id, &name, &iconKey, &start, &end, &enabled, &weekday); err != nil {
 			return nil, err
 		}
 		index, ok := indexes[id]
 		if !ok {
 			index = len(routines)
 			indexes[id] = index
-			routines = append(routines, Routine{ID: id, Name: name, Start: start, End: end, Enabled: enabled != 0})
+			routines = append(routines, Routine{ID: id, Name: name, IconKey: iconKey, Start: start, End: end, Enabled: enabled != 0})
 		}
 		if weekday.Valid {
 			routines[index].Days[weekday.Int64] = true
@@ -644,14 +700,14 @@ func (s *Store) loadPolicy(ctx context.Context, deviceID string) (Policy, error)
 		policy.WeeklyQuota[weekday] = seconds
 	}
 	_ = quotaRows.Close()
-	routineRows, err := s.db.QueryContext(ctx, `SELECT id, name, start_second, end_second, enabled FROM routine WHERE device_id=? ORDER BY name, id`, deviceID)
+	routineRows, err := s.db.QueryContext(ctx, `SELECT id, name, icon_key, start_second, end_second, enabled FROM routine WHERE device_id=? ORDER BY name, id`, deviceID)
 	if err != nil {
 		return Policy{}, err
 	}
 	for routineRows.Next() {
 		var routine Routine
 		var enabled int
-		if err := routineRows.Scan(&routine.ID, &routine.Name, &routine.Start, &routine.End, &enabled); err != nil {
+		if err := routineRows.Scan(&routine.ID, &routine.Name, &routine.IconKey, &routine.Start, &routine.End, &enabled); err != nil {
 			_ = routineRows.Close()
 			return Policy{}, err
 		}

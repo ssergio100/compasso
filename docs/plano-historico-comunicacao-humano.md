@@ -3,7 +3,7 @@
 ## Objetivo
 
 Transformar a página **Comunicação** da interface administrativa vigente
-`docs/prototypes/admin-ui-rhythm` em um histórico que qualquer responsável
+`admin-ui` em um histórico que qualquer responsável
 consiga entender apenas lendo.
 
 Uma ação do administrador deve aparecer como uma única história, do pedido ao
@@ -12,7 +12,7 @@ independentes e passam a ser etapas internas dessa história.
 
 Este plano se aplica somente a:
 
-- `docs/prototypes/admin-ui-rhythm`, a interface administrativa vigente;
+- `admin-ui`, a interface administrativa vigente;
 - `server/web` e `server/storage`, que coordenam e registram as operações;
 - `protocol/v1`, `agent/syncclient` e `agent/storage` somente quando for
   necessário confirmar entrega, aplicação ou falha no computador.

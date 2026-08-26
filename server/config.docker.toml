@@ -1,6 +1,7 @@
 listen_address = "0.0.0.0:8080"
 database_path = "/var/lib/tempo-server/tempo-server.db"
 online_timeout = "60s"
+heartbeat_interval = "3s"
 session_lifetime = "8h"
 secure_cookies = false
 admin_origin = "same-host"

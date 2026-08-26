@@ -31,6 +31,16 @@ func TestAdministrativePolicyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if device.AvatarKey != DefaultAvatarKey {
+		t.Fatalf("default avatar=%q", device.AvatarKey)
+	}
+	if err := store.UpdateDeviceIdentity(ctx, device.ID, "PC da sala", "cat_bow", now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	device, _, err = store.LoadDevice(ctx, device.ID)
+	if err != nil || device.Name != "PC da sala" || device.AvatarKey != "cat_bow" {
+		t.Fatalf("persisted device identity=%+v err=%v", device, err)
+	}
 	var quotas [7]int64
 	quotas[time.Monday] = 2 * 60 * 60
 	quotas[time.Tuesday] = 45 * 60
@@ -50,7 +60,7 @@ func TestAdministrativePolicyLifecycle(t *testing.T) {
 		weekdays[day] = true
 	}
 	routineID, err := store.SaveRoutine(ctx, device.ID, Routine{
-		Name: "Dormir", Days: weekdays, Start: 22 * 60 * 60, End: 8 * 60 * 60, Enabled: true,
+		Name: "Dormir", IconKey: "sleep", Days: weekdays, Start: 22 * 60 * 60, End: 8 * 60 * 60, Enabled: true,
 	}, now.Add(2*time.Minute))
 	if err != nil || routineID == "" {
 		t.Fatalf("routine id=%q err=%v", routineID, err)
@@ -60,8 +70,17 @@ func TestAdministrativePolicyLifecycle(t *testing.T) {
 		t.Fatalf("policy=%+v err=%v", policy, err)
 	}
 	routine := policy.Routines[0]
-	if routine.Start != 79200 || routine.End != 28800 || !routine.Days[time.Monday] || routine.Days[time.Saturday] {
+	if routine.IconKey != "sleep" || routine.Start != 79200 || routine.End != 28800 || !routine.Days[time.Monday] || routine.Days[time.Saturday] {
 		t.Fatalf("overnight weekday routine=%+v", routine)
+	}
+	if _, err := store.SaveRoutine(ctx, device.ID, Routine{
+		ID: routineID, Name: "Dormir cedo", Days: weekdays, Start: 21 * 60 * 60, End: 8 * 60 * 60, Enabled: true,
+	}, now.Add(150*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, policy, err = store.LoadDevice(ctx, device.ID)
+	if err != nil || policy.Routines[0].IconKey != "sleep" {
+		t.Fatalf("legacy routine update lost icon: policy=%+v err=%v", policy, err)
 	}
 
 	verifier := "$argon2id$v=19$m=8192,t=1,p=1$c2FsdHNhbHQ$aGFzaGhhc2hoYXNoaGFzaA"

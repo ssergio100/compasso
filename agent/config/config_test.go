@@ -26,7 +26,7 @@ loginctl_path = "/bin/loginctl"
 	}
 	if got.DatabasePath != "/var/lib/tempo-agent/agent.db" || got.ControlledUser != "child" ||
 		got.TickInterval != 2*time.Second || got.CheckpointInterval != 7*time.Second ||
-		got.LoginctlPath != "/bin/loginctl" {
+		got.LoginctlPath != "/bin/loginctl" || got.HeartbeatInterval != 3*time.Second {
 		t.Fatalf("unexpected configuration: %+v", got)
 	}
 }

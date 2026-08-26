@@ -3,14 +3,14 @@
 ## Objetivo
 
 Substituir o polling de estado do painel administrativo por um fluxo de
-Server-Sent Events (SSE). O servidor passa a empurrar para o `admin-ui-rhythm`
+Server-Sent Events (SSE). O servidor passa a empurrar para o `admin-ui`
 as mudanças que chegam dos agentes (heartbeat, transições de estado, offline),
 sem que o navegador precise ficar consultando se algo mudou.
 
 Essa mudança atende exclusivamente:
 
 - `server/web`: novo endpoint SSE e um hub de publicação de eventos;
-- `docs/prototypes/admin-ui-rhythm`: consumidor do stream no painel vigente.
+- `admin-ui`: consumidor do stream no painel vigente.
 
 Não altera o protocolo de heartbeat do agente (`protocol/v1`), o agente nem a
 `local-ui`.
@@ -86,7 +86,7 @@ Access-Control-Allow-Credentials: true
 O `data` é o mesmo JSON de `GET /api/v1/admin/devices/{id}/status`
 (`deviceLiveStatus` em `server/web/status.go`). O painel aplica o snapshot
 diretamente sobre o dispositivo selecionado, sem reconciliação de contador
-local (o `admin-ui-rhythm` exibe o valor enviado pelo servidor).
+local (o `admin-ui` exibe o valor enviado pelo servidor).
 
 O evento `hello` hidrata o painel na primeira conexão e após reconexões,
 eliminando a necessidade de refetch para recuperar eventos perdidos.
@@ -176,14 +176,14 @@ plano:
 
 ### Configuração e proxy
 
-- O `admin-ui-rhythm` (Vite) conecta-se à origem da API configurada; o
+- O `admin-ui` (Vite) conecta-se à origem da API configurada; o
   `EventSource` respeita `connect-src`, então **nenhuma mudança de CSP é
   necessária** além de permitir a origem da API.
 - Qualquer proxy reverso à frente da API (ex.: `deploy/`) precisa, para a rota
   do stream: `proxy_buffering off`, `proxy_read_timeout` longo (ex.: 3600s) e
   respeitar `X-Accel-Buffering: no`.
 
-## Frontend — `admin-ui-rhythm`
+## Frontend — `admin-ui`
 
 ### `src/api.ts`
 
@@ -255,7 +255,7 @@ origens diferentes.
 - [x] Publicar `device_offline` uma vez por período de ausência e resetar no
   próximo heartbeat.
 
-### Etapa 4 — consumidor no `admin-ui-rhythm`
+### Etapa 4 — consumidor no `admin-ui`
 
 - [x] Adicionar `openStream` ao `src/api.ts` (EventSource com `withCredentials`).
 - [x] Aplicar os eventos `hello`/`status`/`device_offline` sobre o dispositivo
@@ -285,7 +285,7 @@ origens diferentes.
 - [ ] Sessão expirada encerra o stream e o painel volta ao login.
 - [ ] O servidor não faz leituras extras de banco por heartbeat sem assinantes.
 - [x] Compilação Go (`go test ./...`), `make lint` e `npm run build` do
-  `admin-ui-rhythm` aprovam a mudança.
+  `admin-ui` aprovam a mudança.
 
 ## Fora do escopo
 

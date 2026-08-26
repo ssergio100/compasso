@@ -116,7 +116,7 @@ func TestInitialAdministratorIsConfiguredAfterInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	application, err := New(store, false, time.Hour, time.Minute, "")
+	application, err := New(store, false, time.Hour, time.Minute, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	}
 
 	createdResponse := fixture.requestJSON(
-		http.MethodPost, "/api/v1/admin/devices", createAdminDeviceRequest{Name: "Debian KDE"}, true,
+		http.MethodPost, "/api/v1/admin/devices", createAdminDeviceRequest{Name: "Debian KDE", AvatarKey: "cat_bow"}, true,
 	)
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create device status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
@@ -200,7 +200,7 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	}
 
 	routineResponse := fixture.requestJSON(http.MethodPost, devicePath+"/routines", saveAdminRoutineRequest{
-		Name: "Dormir", Days: [7]bool{false, true, true, true, true, true, false},
+		Name: "Dormir", IconKey: "sleep", Days: [7]bool{false, true, true, true, true, true, false},
 		Start: 22 * 3600, End: 8 * 3600, Enabled: true,
 	}, true)
 	if routineResponse.Code != http.StatusCreated {
@@ -217,7 +217,7 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 		t.Fatalf("routine conflict status=%d body=%s", conflictResponse.Code, conflictResponse.Body.String())
 	}
 	updatedRoutineResponse := fixture.requestJSON(http.MethodPut, devicePath+"/routines/"+routineID, saveAdminRoutineRequest{
-		Name: "Dormir cedo", Days: [7]bool{false, true, true, true, true, true, false},
+		Name: "Dormir cedo", IconKey: "reading", Days: [7]bool{false, true, true, true, true, true, false},
 		Start: 21 * 3600, End: 8 * 3600, Enabled: true,
 	}, true)
 	if updatedRoutineResponse.Code != http.StatusOK {
@@ -274,8 +274,8 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	}
 	var detail adminDeviceDetailResponse
 	decodeResponse(t, detailResponse, &detail)
-	if detail.Policy.WeeklyQuota[time.Monday] != 3600 || detail.Policy.WarningMinutes != 5 ||
-		len(detail.Policy.Routines) != 1 || !detail.Policy.PasswordSet || detail.Policy.MonitoringPaused {
+	if detail.Device.AvatarKey != "cat_bow" || detail.Policy.WeeklyQuota[time.Monday] != 3600 || detail.Policy.WarningMinutes != 5 ||
+		len(detail.Policy.Routines) != 1 || detail.Policy.Routines[0].IconKey != "reading" || !detail.Policy.PasswordSet || detail.Policy.MonitoringPaused {
 		t.Fatalf("unexpected device detail: %+v", detail)
 	}
 
@@ -292,10 +292,16 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	}
 
 	renameResponse := fixture.requestJSON(
-		http.MethodPatch, devicePath, updateAdminDeviceRequest{Name: "PC do quarto"}, true,
+		http.MethodPatch, devicePath, updateAdminDeviceRequest{Name: "PC do quarto", AvatarKey: "fox_bow"}, true,
 	)
 	if renameResponse.Code != http.StatusOK {
 		t.Fatalf("rename status=%d body=%s", renameResponse.Code, renameResponse.Body.String())
+	}
+	renamedDetailResponse := fixture.requestJSON(http.MethodGet, devicePath, nil, false)
+	var renamedDetail adminDeviceDetailResponse
+	decodeResponse(t, renamedDetailResponse, &renamedDetail)
+	if renamedDetailResponse.Code != http.StatusOK || renamedDetail.Device.AvatarKey != "fox_bow" {
+		t.Fatalf("updated avatar status=%d detail=%+v", renamedDetailResponse.Code, renamedDetail.Device)
 	}
 	deleteRoutineResponse := fixture.requestJSON(http.MethodDelete, devicePath+"/routines/"+routineID, nil, true)
 	if deleteRoutineResponse.Code != http.StatusNoContent {
@@ -312,6 +318,39 @@ func TestAdministrativeJSONAPIWorkflow(t *testing.T) {
 	deleteDeviceResponse := fixture.requestJSON(http.MethodDelete, devicePath, nil, true)
 	if deleteDeviceResponse.Code != http.StatusNoContent {
 		t.Fatalf("delete device status=%d", deleteDeviceResponse.Code)
+	}
+}
+
+func TestAdministrativeVisualIdentityValidation(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	fixture.login(t)
+
+	invalidDevice := fixture.requestJSON(http.MethodPost, "/api/v1/admin/devices", createAdminDeviceRequest{
+		Name: "PC", AvatarKey: "not-an-avatar",
+	}, true)
+	if invalidDevice.Code != http.StatusBadRequest {
+		t.Fatalf("invalid avatar status=%d body=%s", invalidDevice.Code, invalidDevice.Body.String())
+	}
+	created := fixture.requestJSON(http.MethodPost, "/api/v1/admin/devices", createAdminDeviceRequest{
+		Name: "PC", AvatarKey: "rabbit_flower",
+	}, true)
+	var device adminDeviceResponse
+	decodeResponse(t, created, &device)
+	if created.Code != http.StatusCreated || device.AvatarKey != "rabbit_flower" {
+		t.Fatalf("created identity status=%d device=%+v", created.Code, device)
+	}
+	invalidRoutine := fixture.requestJSON(http.MethodPost, "/api/v1/admin/devices/"+device.ID+"/routines", saveAdminRoutineRequest{
+		Name: "Rotina", IconKey: "not-an-icon", Days: [7]bool{false, true}, Start: 3600, End: 7200, Enabled: true,
+	}, true)
+	if invalidRoutine.Code != http.StatusBadRequest {
+		t.Fatalf("invalid routine icon status=%d body=%s", invalidRoutine.Code, invalidRoutine.Body.String())
+	}
+	invalidUpdate := fixture.requestJSON(http.MethodPatch, "/api/v1/admin/devices/"+device.ID, updateAdminDeviceRequest{
+		Name: "PC", AvatarKey: "not-an-avatar",
+	}, true)
+	if invalidUpdate.Code != http.StatusBadRequest {
+		t.Fatalf("invalid avatar update status=%d body=%s", invalidUpdate.Code, invalidUpdate.Body.String())
 	}
 }
 
@@ -572,6 +611,53 @@ func TestHeartbeatRequiresDeviceCredential(t *testing.T) {
 		if strings.Contains(string(encoded), token) || strings.Contains(string(encoded), "wrong") {
 			t.Fatalf("communication log exposed credential: %s", encoded)
 		}
+	}
+}
+
+func TestHeartbeatIntervalIsSentOnlyToCapableAgentsAndChangesGlobally(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	device, err := fixture.store.CreateDevice(context.Background(), "Interval negotiation", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := fixture.store.IssueDeviceToken(context.Background(), device.ID, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision,
+		LocalDate:      fixture.now.Format("2006-01-02"),
+	})
+	request := func(capabilities string) *httptest.ResponseRecorder {
+		heartbeatRequest := httptest.NewRequest(http.MethodPost, protocol.HeartbeatPath, bytes.NewReader(payload))
+		heartbeatRequest.Header.Set(deviceIDHeader, device.ID)
+		heartbeatRequest.Header.Set("Authorization", "Bearer "+token)
+		heartbeatRequest.Header.Set(protocol.VersionHeader, protocol.CurrentProtocolVersion)
+		if capabilities != "" {
+			heartbeatRequest.Header.Set(protocol.CapabilitiesHeader, capabilities)
+		}
+		response := httptest.NewRecorder()
+		fixture.app.ServeHTTP(response, heartbeatRequest)
+		if response.Code != http.StatusOK {
+			t.Fatalf("heartbeat status=%d body=%s", response.Code, response.Body.String())
+		}
+		return response
+	}
+
+	legacyResponse := request("")
+	var legacyPayload map[string]json.RawMessage
+	decodeResponse(t, legacyResponse, &legacyPayload)
+	if _, exists := legacyPayload["next_heartbeat_seconds"]; exists {
+		t.Fatal("server sent the new field to an agent that did not advertise support")
+	}
+
+	fixture.app.heartbeatInterval = 9 * time.Second
+	capableResponse := request("another-capability, " + protocol.NextHeartbeatCapability)
+	var heartbeatResponse protocol.HeartbeatResponse
+	decodeResponse(t, capableResponse, &heartbeatResponse)
+	if heartbeatResponse.NextHeartbeatSeconds != 9 {
+		t.Fatalf("next heartbeat seconds=%d, want updated global value", heartbeatResponse.NextHeartbeatSeconds)
 	}
 }
 
@@ -865,7 +951,7 @@ func newWebFixture(t testContext, secureCookies bool, sessionLifetime time.Durat
 	if _, err := store.BootstrapAdmin(ctx, "admin", passwordHash, now); err != nil {
 		t.Fatal(err)
 	}
-	application, err := New(store, secureCookies, sessionLifetime, 60*time.Second, "")
+	application, err := New(store, secureCookies, sessionLifetime, 60*time.Second, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}

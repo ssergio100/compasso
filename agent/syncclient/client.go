@@ -26,7 +26,12 @@ type Config struct {
 	AttemptTimeout    time.Duration
 }
 
-const repeatedFailureLogInterval = time.Minute
+const (
+	DefaultHeartbeatInterval   = 3 * time.Second
+	MinimumHeartbeatInterval   = time.Second
+	MaximumHeartbeatInterval   = 10 * time.Minute
+	repeatedFailureLogInterval = time.Minute
+)
 
 type heartbeatError struct {
 	stage string
@@ -49,6 +54,7 @@ type Client struct {
 	http                   *http.Client
 	config                 Config
 	now                    func() time.Time
+	wait                   func(context.Context, time.Duration) bool
 	graphicalSessionMu     sync.RWMutex
 	graphicalSessionActive bool
 	graphicalSessionID     string
@@ -117,11 +123,14 @@ func New(store *storage.Store, httpClient *http.Client, config Config) (*Client,
 		return nil, errors.New("store and HTTP client are required")
 	}
 	if config.ServerURL == "" || config.DeviceID == "" || config.DeviceToken == "" ||
-		config.HeartbeatInterval <= 0 || config.AttemptTimeout <= 0 {
+		config.AttemptTimeout <= 0 {
 		return nil, errors.New("complete synchronization configuration is required")
 	}
+	if config.HeartbeatInterval < MinimumHeartbeatInterval || config.HeartbeatInterval > MaximumHeartbeatInterval {
+		return nil, errors.New("heartbeat fallback must be between 1 second and 10 minutes")
+	}
 	config.ServerURL = strings.TrimRight(config.ServerURL, "/")
-	return &Client{store: store, http: httpClient, config: config, now: time.Now}, nil
+	return &Client{store: store, http: httpClient, config: config, now: time.Now, wait: waitForHeartbeat}, nil
 }
 
 // SetGraphicalSession reports the established graphical session observed by
@@ -222,6 +231,7 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 	httpRequest.Header.Set("Authorization", "Bearer "+c.config.DeviceToken)
 	httpRequest.Header.Set("X-Tempo-Device-ID", c.config.DeviceID)
 	httpRequest.Header.Set(protocol.VersionHeader, protocol.CurrentProtocolVersion)
+	httpRequest.Header.Set(protocol.CapabilitiesHeader, protocol.NextHeartbeatCapability)
 	stage = "transport"
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
@@ -377,29 +387,24 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		logger = log.Default()
 	}
 	delay := time.Duration(0)
-	initialBackoff := time.Second
-	if c.config.HeartbeatInterval < initialBackoff {
-		initialBackoff = c.config.HeartbeatInterval
-	}
+	normalInterval := c.config.HeartbeatInterval
+	initialBackoff := initialHeartbeatBackoff(normalInterval)
 	backoff := initialBackoff
 	online := false
 	first := true
+	fastFollowUp := false
 	attempts := 0
 	var offlineSince time.Time
 	var lastFailureLog time.Time
 	for {
 		if delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+			if !c.wait(ctx, delay) {
 				return nil
-			case <-timer.C:
 			}
 		}
 		attemptStarted := time.Now()
 		attemptContext, cancelAttempt := context.WithTimeout(ctx, c.config.AttemptTimeout)
-		_, err := c.Heartbeat(attemptContext, c.now())
+		result, err := c.Heartbeat(attemptContext, c.now())
 		cancelAttempt()
 		attemptFinished := time.Now()
 		attemptDuration := attemptFinished.Sub(attemptStarted)
@@ -421,6 +426,7 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 					attemptDuration.Round(time.Millisecond), err)
 			}
 			online, first = false, false
+			fastFollowUp = false
 			// Keep retry cadence measured from the start of the failed attempt.
 			// A request that consumed its whole timeout must not add another full
 			// backoff before the next try.
@@ -429,8 +435,8 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 				delay = 0
 			}
 			backoff *= 2
-			if backoff > c.config.HeartbeatInterval {
-				backoff = c.config.HeartbeatInterval
+			if backoff > normalInterval {
+				backoff = normalInterval
 			}
 			continue
 		}
@@ -447,9 +453,47 @@ func (c *Client) Run(ctx context.Context, logger *log.Logger) error {
 		attempts = 0
 		offlineSince = time.Time{}
 		lastFailureLog = time.Time{}
+		normalInterval = nextHeartbeatInterval(result.NextHeartbeatSeconds, c.config.HeartbeatInterval)
+		initialBackoff = initialHeartbeatBackoff(normalInterval)
 		backoff = initialBackoff
-		delay = c.config.HeartbeatInterval
+		if len(result.Commands) > 0 && !fastFollowUp {
+			// Commands are durably recorded during Heartbeat. Report their IDs in
+			// an immediate follow-up instead of waiting a full normal interval.
+			// At most one accelerated request is allowed in sequence so a server
+			// that repeats a command cannot cause a busy synchronization loop.
+			delay = 0
+			fastFollowUp = true
+		} else {
+			delay = normalInterval
+			fastFollowUp = false
+		}
 	}
+}
+
+func waitForHeartbeat(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextHeartbeatInterval(serverSeconds int64, fallback time.Duration) time.Duration {
+	if serverSeconds < int64(MinimumHeartbeatInterval/time.Second) ||
+		serverSeconds > int64(MaximumHeartbeatInterval/time.Second) {
+		return fallback
+	}
+	return time.Duration(serverSeconds) * time.Second
+}
+
+func initialHeartbeatBackoff(normalInterval time.Duration) time.Duration {
+	if normalInterval < time.Second {
+		return normalInterval
+	}
+	return time.Second
 }
 
 func fromProtocolPolicy(policy protocol.Policy) storage.PolicySnapshot {

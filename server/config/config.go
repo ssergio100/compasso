@@ -12,12 +12,13 @@ import (
 )
 
 type Config struct {
-	ListenAddress   string
-	DatabasePath    string
-	AdminOrigin     string
-	SecureCookies   bool
-	SessionLifetime time.Duration
-	OnlineTimeout   time.Duration
+	ListenAddress     string
+	DatabasePath      string
+	AdminOrigin       string
+	SecureCookies     bool
+	SessionLifetime   time.Duration
+	OnlineTimeout     time.Duration
+	HeartbeatInterval time.Duration
 }
 
 func Load(path string) (Config, error) {
@@ -53,8 +54,8 @@ func Load(path string) (Config, error) {
 	}
 	configuration := Config{
 		ListenAddress: values["listen_address"], DatabasePath: values["database_path"],
-		AdminOrigin:     values["admin_origin"],
-		SessionLifetime: 8 * time.Hour, OnlineTimeout: 60 * time.Second,
+		AdminOrigin: values["admin_origin"], SessionLifetime: 8 * time.Hour,
+		OnlineTimeout: 60 * time.Second, HeartbeatInterval: 3 * time.Second,
 	}
 	if value := values["secure_cookies"]; value != "" {
 		configuration.SecureCookies, err = strconv.ParseBool(value)
@@ -72,6 +73,12 @@ func Load(path string) (Config, error) {
 		configuration.OnlineTimeout, err = time.ParseDuration(value)
 		if err != nil {
 			return Config{}, fmt.Errorf("parse online_timeout: %w", err)
+		}
+	}
+	if value := values["heartbeat_interval"]; value != "" {
+		configuration.HeartbeatInterval, err = time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse heartbeat_interval: %w", err)
 		}
 	}
 	if err := configuration.Validate(); err != nil {
@@ -96,6 +103,13 @@ func ApplyEnvironmentOverrides(configuration Config, environmentValue func(strin
 		}
 		configuration.SecureCookies = value
 	}
+	if heartbeatInterval := strings.TrimSpace(environmentValue("TEMPO_HEARTBEAT_INTERVAL")); heartbeatInterval != "" {
+		value, err := time.ParseDuration(heartbeatInterval)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse TEMPO_HEARTBEAT_INTERVAL: %w", err)
+		}
+		configuration.HeartbeatInterval = value
+	}
 	if err := configuration.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -111,6 +125,9 @@ func (c Config) Validate() error {
 	}
 	if c.OnlineTimeout < 10*time.Second || c.OnlineTimeout > 10*time.Minute {
 		return errors.New("online_timeout must be between 10 seconds and 10 minutes")
+	}
+	if c.HeartbeatInterval < time.Second || c.HeartbeatInterval > 10*time.Minute || c.HeartbeatInterval%time.Second != 0 {
+		return errors.New("heartbeat_interval must be a whole number of seconds between 1 second and 10 minutes")
 	}
 	return nil
 }

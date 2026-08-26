@@ -138,6 +138,10 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 		writeJSONError(w, status, "heartbeat rejected")
 		return
 	}
+	if requestHasCapability(r, protocol.NextHeartbeatCapability) {
+		response.NextHeartbeatSeconds = int64(a.heartbeatInterval / time.Second)
+		details["next_heartbeat_seconds"] = strconv.FormatInt(response.NextHeartbeatSeconds, 10)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	details["policy_sent"] = strconv.FormatBool(response.Policy != nil)
@@ -157,6 +161,17 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 		}
 	}
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func requestHasCapability(r *http.Request, capability string) bool {
+	for _, header := range r.Header.Values(protocol.CapabilitiesHeader) {
+		for _, advertised := range strings.Split(header, ",") {
+			if strings.TrimSpace(advertised) == capability {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func humanHeartbeatRejection(err error) string {

@@ -2,10 +2,53 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestMigrationElevenAddsAndBackfillsVisualIdentities(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "server.db")
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+		CREATE TABLE device (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+		CREATE TABLE routine (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, name TEXT NOT NULL);
+		INSERT INTO schema_migrations(version) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+		INSERT INTO device(id,name) VALUES ('device-1','PC antigo');
+		INSERT INTO routine(id,device_id,name) VALUES ('sleep','device-1','Hora de dormir'),('reading','device-1','Leitura');
+	`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var avatarKey, sleepIcon, readingIcon string
+	if err := store.db.QueryRowContext(ctx, `SELECT avatar_key FROM device WHERE id='device-1'`).Scan(&avatarKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT icon_key FROM routine WHERE id='sleep'`).Scan(&sleepIcon); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT icon_key FROM routine WHERE id='reading'`).Scan(&readingIcon); err != nil {
+		t.Fatal(err)
+	}
+	if avatarKey != "cat" || sleepIcon != "sleep" || readingIcon != "reading" {
+		t.Fatalf("backfill avatar=%q sleep=%q reading=%q", avatarKey, sleepIcon, readingIcon)
+	}
+}
 
 func TestMigrationNineRepairsActivitySchemaRecordedButMissing(t *testing.T) {
 	ctx := context.Background()

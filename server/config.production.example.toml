@@ -2,6 +2,7 @@
 listen_address = "0.0.0.0:8080"
 database_path = "/var/lib/tempo-server/tempo-server.db"
 online_timeout = "60s"
+heartbeat_interval = "3s"
 session_lifetime = "8h"
 
 # Exemplo para uma implantação HTTPS com frontend e API em origens diferentes.

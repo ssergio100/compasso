@@ -24,8 +24,10 @@ type Config struct {
 	ServerURL          string
 	DeviceID           string
 	DeviceToken        string
-	HeartbeatInterval  time.Duration
-	HTTPTimeout        time.Duration
+	// HeartbeatInterval remains readable for upgrades from existing local files.
+	// The installed agent passes syncclient its embedded safe fallback instead.
+	HeartbeatInterval time.Duration
+	HTTPTimeout       time.Duration
 }
 
 // Load reads the flat TOML subset used by the agent configuration. Keeping the
@@ -84,7 +86,7 @@ func Load(path string) (Config, error) {
 		ServerURL:          strings.TrimRight(values["server_url"], "/"),
 		DeviceID:           values["device_id"],
 		DeviceToken:        values["device_token"],
-		HeartbeatInterval:  10 * time.Second,
+		HeartbeatInterval:  3 * time.Second,
 		HTTPTimeout:        8 * time.Second,
 	}
 	if value := values["tick_interval"]; value != "" {

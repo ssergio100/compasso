@@ -2,7 +2,7 @@
 
 O `tempo-server` oferece somente a API JSON de administração e sincronização.
 Ele não lê, renderiza nem serve a interface web. O painel independente vive em
-`docs/prototypes/admin-ui-rhythm/` e recebe a URL da API em runtime.
+`admin-ui/` e recebe a URL da API em runtime.
 
 ## Desenvolvimento
 
@@ -19,6 +19,9 @@ navegador. A configuração inicial deixa de existir após essa criação.
 
 Em produção, `secure_cookies` deve ser `true`. O SQLite definido por
 `database_path` precisa ficar em volume persistente do servidor Docker.
+O intervalo global enviado aos agentes é configurado por `heartbeat_interval`
+no TOML ou por `TEMPO_HEARTBEAT_INTERVAL` no contêiner; o padrão é `3s` e os
+limites aceitos são de 1 segundo a 10 minutos inteiros.
 
 ## Produção com Docker
 

@@ -17,6 +17,7 @@ services:
     environment:
       TEMPO_ADMIN_ORIGIN: ${COMPASSO_ADMIN_ORIGIN:-same-host}
       TEMPO_SECURE_COOKIES: ${COMPASSO_SECURE_COOKIES:-false}
+      TEMPO_HEARTBEAT_INTERVAL: ${COMPASSO_HEARTBEAT_INTERVAL:-3s}
     volumes:
       - type: bind
         source: ${COMPASSO_DATA_DIRECTORY:-/srv/docker/volumes/compasso}/server

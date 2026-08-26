@@ -26,7 +26,7 @@ Versões estruturais vigentes:
 - endpoint de sincronização: `/api/v1/device/heartbeat`;
 - esquema SQLite do agente: migração `4`;
 - esquema SQLite do servidor: migração `10`;
-- única interface ADM: `docs/prototypes/admin-ui-rhythm`.
+- única interface ADM: `admin-ui`.
 
 Este documento é canônico para a arquitetura, mas os tipos em
 `protocol/v1/sync.go`, as rotas em `server/web` e as transações em
@@ -157,7 +157,7 @@ Servidor em outra máquina **DEVE** usar HTTPS.
 
 | Regra | Valor padrão | Limites implementados |
 | --- | ---: | ---: |
-| Heartbeat normal | 10 s | 1 s a 10 min |
+| Heartbeat normal orientado pelo servidor | 3 s | 1 s a 10 min |
 | Timeout de uma tentativa HTTP do agente | 8 s | 1 s a 1 min |
 | Dispositivo considerado offline | 60 s | 10 s a 10 min |
 | Keep-alive SSE | 15 s | constante atual |
@@ -168,6 +168,12 @@ Servidor em outra máquina **DEVE** usar HTTPS.
 
 O seletor atual do ADM oferece 1, 7, 15, 30, 60 e 90 dias para o diagnóstico,
 embora a API aceite até 365 dias.
+
+O servidor define um único intervalo global em `heartbeat_interval` ou em
+`TEMPO_HEARTBEAT_INTERVAL`. O agente usa 3 segundos embutidos antes da primeira
+resposta válida e sempre que o campo remoto estiver ausente ou fora dos limites.
+O `heartbeat_interval` local continua sendo lido para compatibilidade com
+instalações existentes, mas não controla mais o processo instalado.
 
 ### 4.3 Retry do agente
 
@@ -180,6 +186,11 @@ Após uma falha, o agente:
 5. limita o backoff ao intervalo normal do heartbeat;
 6. desconta do atraso o tempo já gasto na tentativa;
 7. volta ao intervalo normal depois do primeiro sucesso.
+
+Quando uma resposta válida contém comandos, o agente faz um heartbeat adicional
+imediatamente após persistir sua aplicação. Esse ciclo acelerado transporta os
+`command_acks` sem aguardar o intervalo normal. Apenas um ciclo consecutivo pode
+ser acelerado, evitando um loop ocupado se o servidor repetir um comando.
 
 A primeira falha, a transição online → offline e a recuperação são registradas
 imediatamente. Enquanto continua offline, o agente registra novo resumo no
@@ -248,14 +259,14 @@ exigem sessão administrativa. Toda mutação exige CSRF.
 | `DELETE /api/v1/admin/session` | logout | `204` |
 | `POST /api/v1/admin/setup` | criar primeiro administrador | sessão criada |
 | `GET /api/v1/admin/devices` | listar dispositivos | resumos |
-| `POST /api/v1/admin/devices` | cadastrar dispositivo | `201` + dispositivo |
+| `POST /api/v1/admin/devices` | cadastrar dispositivo e escolher avatar | `201` + dispositivo |
 | `GET /api/v1/admin/devices/{id}` | detalhe completo | dispositivo, política, controle, estado e auditoria |
-| `PATCH /api/v1/admin/devices/{id}` | renomear | `200` |
+| `PATCH /api/v1/admin/devices/{id}` | alterar nome e avatar | `200` |
 | `DELETE /api/v1/admin/devices/{id}` | excluir e apagar dados relacionados | `204` |
 | `GET /api/v1/admin/devices/{id}/status` | estado calculado | snapshot vivo |
 | `PUT /api/v1/admin/devices/{id}/policy` | cotas semanais e aviso | `200` |
-| `POST /api/v1/admin/devices/{id}/routines` | criar rotina | `201` + ID do servidor |
-| `PUT /api/v1/admin/devices/{id}/routines/{routine_id}` | alterar rotina | `200` |
+| `POST /api/v1/admin/devices/{id}/routines` | criar rotina e escolher ícone | `201` + ID do servidor |
+| `PUT /api/v1/admin/devices/{id}/routines/{routine_id}` | alterar rotina e ícone | `200` |
 | `DELETE /api/v1/admin/devices/{id}/routines/{routine_id}` | excluir rotina | `204` |
 | `PUT /api/v1/admin/devices/{id}/password` | trocar senha local | `200` |
 | `POST /api/v1/admin/devices/{id}/token` | emitir/substituir token | `201`, segredo uma vez |
@@ -275,6 +286,12 @@ exigem sessão administrativa. Toda mutação exige CSRF.
 Corpos JSON administrativos são limitados a 64 KiB, rejeitam campos
 desconhecidos e não aceitam conteúdo extra depois do primeiro objeto.
 
+As identidades visuais são persistidas como chaves lógicas, nunca como caminhos
+de arquivos. O campo `avatar_key` identifica o avatar do dispositivo e
+`icon_key` identifica o ícone da rotina. Clientes antigos continuam aceitos:
+na criação, a omissão aplica o padrão; na edição, preserva o valor já salvo.
+Esses campos pertencem à administração e não fazem parte do heartbeat do agente.
+
 ### 6.1 Validações de negócio relevantes
 
 | Objeto | Regra atual |
@@ -282,9 +299,11 @@ desconhecidos e não aceitam conteúdo extra depois do primeiro objeto.
 | Login inicial | texto não vazio, até 80 caracteres |
 | Senha administrativa inicial | não vazia, confirmação igual, até 4096 caracteres |
 | Nome do dispositivo | texto não vazio depois de remover espaços externos, até 80 caracteres |
+| Avatar do dispositivo | `cat`, `dog`, `fox`, `rabbit`, `panda`, `owl`, `penguin`, `capybara`, `cat_bow`, `rabbit_flower`, `panda_flower` ou `fox_bow` |
 | Cota de cada dia | 0 a 86.400 segundos |
 | Aviso | 0 a 120 minutos no servidor; o ADM oferece valores predefinidos |
 | Nome da rotina | texto não vazio, até 80 caracteres |
+| Ícone da rotina | `study`, `reading`, `sleep`, `bath`, `meal`, `school`, `exercise`, `chores`, `family`, `music`, `outdoor` ou `general` |
 | Horário da rotina | início e fim entre 0 e 86.399 segundos |
 | Dias da rotina | pelo menos um dos sete dias |
 | Conflito de rotina | nenhum intervalo efetivo pode sobrepor outro no mesmo dispositivo |
@@ -338,6 +357,7 @@ Regras:
 ```json
 {
   "server_time": "2026-08-24T12:00:00Z",
+  "next_heartbeat_seconds": 3,
   "acknowledged_events": [],
   "policy": null,
   "session_state": null,
@@ -352,6 +372,8 @@ Regras:
 
 O servidor sempre envia `control`. Os demais campos são condicionais:
 
+- `next_heartbeat_seconds`: intervalo global do próximo ciclo normal, enviado
+  apenas quando o agente anuncia a capacidade `next-heartbeat-seconds`;
 - `acknowledged_events`: eventos locais aceitos nesta requisição;
 - `policy`: política completa quando a revisão do agente está atrasada;
 - `session_state`: âncora de saldo quando solicitada ou desatualizada;
@@ -362,6 +384,12 @@ O servidor sempre envia `control`. Os demais campos são condicionais:
 Ausência do cabeçalho de versão é interpretada como protocolo `1`.
 
 - versões diferentes de `1` e `2` recebem `400`;
+- o agente capaz envia
+  `X-Compasso-Capabilities: next-heartbeat-seconds`;
+- sem esse anúncio, o servidor omite o novo campo para não quebrar agentes
+  antigos que rejeitam propriedades desconhecidas;
+- servidores antigos ignoram o cabeçalho, e o agente novo usa o valor seguro
+  embutido quando a resposta não contém o campo;
 - agente v1 pode sincronizar enquanto não existir bônus remoto pendente;
 - agente v1 com bônus remoto pendente recebe `426` e código
   `agent_upgrade_required`;
@@ -925,6 +953,6 @@ vida do dispositivo, com política explícita de privacidade e retenção.
 | Transação do heartbeat | `server/storage/sync.go` |
 | Política e domínio | `server/storage/domain.go` |
 | Atividade humana | `server/storage/activities.go` |
-| Cliente HTTP/SSE do ADM | `docs/prototypes/admin-ui-rhythm/src/api.ts` |
-| Orquestração do ADM | `docs/prototypes/admin-ui-rhythm/src/App.tsx` |
-| Histórico humano/técnico | `docs/prototypes/admin-ui-rhythm/src/communication/CommunicationPage.tsx` |
+| Cliente HTTP/SSE do ADM | `admin-ui/src/api.ts` |
+| Orquestração do ADM | `admin-ui/src/App.tsx` |
+| Histórico humano/técnico | `admin-ui/src/communication/CommunicationPage.tsx` |

@@ -111,7 +111,7 @@ func run(configPath string, logger *log.Logger) error {
 	logger.Printf("starting controlled_user=%s database=%s", settings.ControlledUser, settings.DatabasePath)
 	synchronizer, err := syncclient.New(store, &http.Client{Timeout: settings.HTTPTimeout}, syncclient.Config{
 		ServerURL: settings.ServerURL, DeviceID: settings.DeviceID,
-		DeviceToken: settings.DeviceToken, HeartbeatInterval: settings.HeartbeatInterval,
+		DeviceToken: settings.DeviceToken, HeartbeatInterval: syncclient.DefaultHeartbeatInterval,
 		AttemptTimeout: settings.HTTPTimeout,
 	})
 	if err != nil {

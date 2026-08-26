@@ -67,6 +67,9 @@ func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 		if r.Header.Get(protocol.VersionHeader) != protocol.CurrentProtocolVersion {
 			t.Errorf("protocol version header=%q", r.Header.Get(protocol.VersionHeader))
 		}
+		if r.Header.Get(protocol.CapabilitiesHeader) != protocol.NextHeartbeatCapability {
+			t.Errorf("protocol capabilities header=%q", r.Header.Get(protocol.CapabilitiesHeader))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
 	})}}
@@ -99,6 +102,158 @@ func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 	}
 }
 
+func TestRunUsesServerIntervalAndDoesNotPersistItAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+
+	serverIntervals := []int64{4, 9}
+	var requests uint32
+	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestIndex := int(atomic.AddUint32(&requests, 1)) - 1
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protocol.HeartbeatResponse{
+			NextHeartbeatSeconds: serverIntervals[requestIndex],
+		})
+	})}}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: DefaultHeartbeatInterval, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waits []time.Duration
+	client.wait = func(_ context.Context, delay time.Duration) bool {
+		waits = append(waits, delay)
+		return len(waits) < 2
+	}
+	if err := client.Run(ctx, log.New(io.Discard, "", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 2 || waits[0] != 4*time.Second || waits[1] != 9*time.Second {
+		t.Fatalf("server-controlled waits=%v", waits)
+	}
+
+	// A new process starts from its embedded fallback. The previously received
+	// interval was process-local and never reached durable storage.
+	restartedClient, err := New(agentStore, &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})}}, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: DefaultHeartbeatInterval, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedWait := time.Duration(0)
+	restartedClient.wait = func(_ context.Context, delay time.Duration) bool {
+		restartedWait = delay
+		return false
+	}
+	if err := restartedClient.Run(ctx, log.New(io.Discard, "", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if restartedWait != DefaultHeartbeatInterval {
+		t.Fatalf("restart wait=%s, want embedded fallback", restartedWait)
+	}
+}
+
+func TestNextHeartbeatIntervalRejectsMissingAndUnsafeValues(t *testing.T) {
+	fallback := DefaultHeartbeatInterval
+	for _, test := range []struct {
+		name    string
+		seconds int64
+		want    time.Duration
+	}{
+		{name: "missing", seconds: 0, want: fallback},
+		{name: "negative", seconds: -1, want: fallback},
+		{name: "below minimum", seconds: int64(MinimumHeartbeatInterval/time.Second) - 1, want: fallback},
+		{name: "minimum", seconds: int64(MinimumHeartbeatInterval / time.Second), want: MinimumHeartbeatInterval},
+		{name: "maximum", seconds: int64(MaximumHeartbeatInterval / time.Second), want: MaximumHeartbeatInterval},
+		{name: "above maximum", seconds: int64(MaximumHeartbeatInterval/time.Second) + 1, want: fallback},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nextHeartbeatInterval(test.seconds, fallback); got != test.want {
+				t.Fatalf("next interval=%s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNewRejectsUnsafeHeartbeatFallback(t *testing.T) {
+	ctx := context.Background()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+	for _, interval := range []time.Duration{time.Millisecond, MaximumHeartbeatInterval + time.Second} {
+		if _, err := New(agentStore, http.DefaultClient, Config{
+			ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+			HeartbeatInterval: interval, AttemptTimeout: time.Second,
+		}); err == nil {
+			t.Fatalf("unsafe heartbeat fallback %s accepted", interval)
+		}
+	}
+}
+
+func TestRunImmediatelyAcknowledgesReceivedCommand(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentStore.Close()
+
+	const commandID = "block-command"
+	var requests uint32
+	acknowledged := make(chan []string, 1)
+	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var heartbeat protocol.HeartbeatRequest
+		if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
+			t.Errorf("decode heartbeat: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddUint32(&requests, 1) == 1 {
+			_, _ = w.Write([]byte(`{
+				"server_time":"2026-08-24T12:00:00Z",
+				"commands":[{"id":"block-command","kind":"block_now","created_at":"2026-08-24T12:00:00Z"}],
+				"control":{"revision":2,"manual_block":true}
+			}`))
+			return
+		}
+		acknowledged <- heartbeat.CommandAcks
+		_, _ = w.Write([]byte(`{"server_time":"2026-08-24T12:00:01Z","control":{"revision":2,"manual_block":true}}`))
+	})}}
+	client, err := New(agentStore, httpClient, Config{
+		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
+		HeartbeatInterval: time.Second, AttemptTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	finished := make(chan error, 1)
+	go func() { finished <- client.Run(ctx, log.New(io.Discard, "", 0)) }()
+	select {
+	case commandAcks := <-acknowledged:
+		if len(commandAcks) != 1 || commandAcks[0] != commandID {
+			t.Fatalf("immediate command acknowledgements=%v", commandAcks)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("command acknowledgement waited for the normal heartbeat interval")
+	}
+	cancel()
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunTimesOutStalledAttemptAndReconnects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -111,11 +266,13 @@ func TestRunTimesOutStalledAttemptAndReconnects(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	client, err := New(agentStore, httpClient, Config{
 		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
-		HeartbeatInterval: 5 * time.Millisecond, AttemptTimeout: 20 * time.Millisecond,
+		HeartbeatInterval: MinimumHeartbeatInterval, AttemptTimeout: 20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Bound this timing test without weakening the production constructor.
+	client.config.HeartbeatInterval = 5 * time.Millisecond
 	reported := make(chan error, 2)
 	client.SetStatusReporter(func(synchronizationError error) {
 		reported <- synchronizationError
@@ -224,7 +381,7 @@ func TestRevisionOfflineQueueAndImmediateEnforcement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +519,7 @@ func TestSessionBalanceIsAnchoredOnceAndOnlyRefreshedByRealChange(t *testing.T) 
 	if err := serverStore.SaveQuotas(ctx, device.ID, quotas, 1, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +605,7 @@ func TestThirtyMinuteBonusReplacesOneMinuteAnchorOnlyAfterDurableApplication(t *
 	if err := serverStore.SaveQuotas(ctx, device.ID, quotas, 10, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +749,7 @@ func TestLocalPasswordChangesOnlyAfterSuccessfulSynchronization(t *testing.T) {
 	if err := serverStore.SetLocalPassword(ctx, device.ID, oldVerifier, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	application, err := web.New(serverStore, false, time.Hour, time.Minute, "")
+	application, err := web.New(serverStore, false, time.Hour, time.Minute, 3*time.Second, "")
 	if err != nil {
 		t.Fatal(err)
 	}

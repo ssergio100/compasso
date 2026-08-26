@@ -47,6 +47,8 @@ if [[ ! "${packaged_container_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]
   exit 1
 fi
 test -f "${package_root}/compose.yaml"
+test -f "${package_root}/README.md"
+test -f "${package_root}/docs/atualizacao-manual-servidor.md"
 test -x "${package_root}/scripts/install-server.sh"
 test ! -e "${package_root}/secrets"
 test ! -e "${package_root}/server/config.toml"

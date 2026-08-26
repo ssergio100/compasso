@@ -51,6 +51,7 @@ type adminSetupRequest struct {
 type adminDeviceResponse struct {
 	ID                     string     `json:"id"`
 	Name                   string     `json:"name"`
+	AvatarKey              string     `json:"avatar_key"`
 	LastSeenAt             *time.Time `json:"last_seen_at"`
 	PolicyRevision         int64      `json:"policy_revision"`
 	AppliedPolicyRevision  int64      `json:"applied_policy_revision"`
@@ -61,6 +62,7 @@ type adminDeviceResponse struct {
 type adminRoutineResponse struct {
 	ID      string  `json:"id"`
 	Name    string  `json:"name"`
+	IconKey string  `json:"icon_key"`
 	Days    [7]bool `json:"days"`
 	Start   int64   `json:"start_second"`
 	End     int64   `json:"end_second"`
@@ -100,11 +102,13 @@ type adminControlResponse struct {
 }
 
 type createAdminDeviceRequest struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	AvatarKey string `json:"avatar_key"`
 }
 
 type updateAdminDeviceRequest struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	AvatarKey string `json:"avatar_key"`
 }
 
 type updateAdminPolicyRequest struct {
@@ -114,6 +118,7 @@ type updateAdminPolicyRequest struct {
 
 type saveAdminRoutineRequest struct {
 	Name    string  `json:"name"`
+	IconKey string  `json:"icon_key"`
 	Days    [7]bool `json:"days"`
 	Start   int64   `json:"start_second"`
 	End     int64   `json:"end_second"`
@@ -323,7 +328,7 @@ func (a *App) adminDevicesAPI(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
-		device, err := a.store.CreateDevice(r.Context(), request.Name, a.now())
+		device, err := a.store.CreateDeviceWithAvatar(r.Context(), request.Name, request.AvatarKey, a.now())
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid device")
 			return
@@ -418,12 +423,21 @@ func (a *App) adminDeviceRootAPI(w http.ResponseWriter, r *http.Request, current
 			writeJSONError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
-		if err := a.store.RenameDevice(r.Context(), deviceID, request.Name, a.now()); err != nil {
+		var err error
+		if request.AvatarKey == "" {
+			err = a.store.RenameDevice(r.Context(), deviceID, request.Name, a.now())
+		} else {
+			err = a.store.UpdateDeviceIdentity(r.Context(), deviceID, request.Name, request.AvatarKey, a.now())
+		}
+		if err != nil {
 			writeAdminMutationError(w, err)
 			return
 		}
 		addCommunicationDetail(r, "device_name", request.Name)
-		writeJSON(w, http.StatusOK, map[string]string{"message": "device renamed"})
+		if request.AvatarKey != "" {
+			addCommunicationDetail(r, "avatar_key", request.AvatarKey)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"message": "device identity updated"})
 	case http.MethodDelete:
 		if !requireAdminCSRF(w, r, current) {
 			return
@@ -515,7 +529,7 @@ func (a *App) adminDeviceRoutinesAPI(w http.ResponseWriter, r *http.Request, cur
 		return
 	}
 	createdRoutineID, err := a.store.SaveRoutine(r.Context(), deviceID, storage.Routine{
-		ID: routineID, Name: request.Name, Days: request.Days, Start: request.Start,
+		ID: routineID, Name: request.Name, IconKey: request.IconKey, Days: request.Days, Start: request.Start,
 		End: request.End, Enabled: request.Enabled,
 	}, a.now())
 	if err != nil {
@@ -792,7 +806,7 @@ func writeAdminMutationError(w http.ResponseWriter, err error) {
 
 func (a *App) adminDeviceResponse(device storage.Device) adminDeviceResponse {
 	return adminDeviceResponse{
-		ID: device.ID, Name: device.Name, LastSeenAt: device.LastSeenAt,
+		ID: device.ID, Name: device.Name, AvatarKey: device.AvatarKey, LastSeenAt: device.LastSeenAt,
 		PolicyRevision: device.PolicyRevision, AppliedPolicyRevision: device.AppliedPolicyRevision,
 		GraphicalSessionActive: device.GraphicalSessionActive,
 		Online:                 isOnline(device.LastSeenAt, a.now(), a.onlineTimeout),
@@ -803,7 +817,7 @@ func adminPolicyResponseFromStorage(storedPolicy storage.Policy) adminPolicyResp
 	routines := make([]adminRoutineResponse, 0, len(storedPolicy.Routines))
 	for _, routine := range storedPolicy.Routines {
 		routines = append(routines, adminRoutineResponse{
-			ID: routine.ID, Name: routine.Name, Days: routine.Days, Start: routine.Start,
+			ID: routine.ID, Name: routine.Name, IconKey: routine.IconKey, Days: routine.Days, Start: routine.Start,
 			End: routine.End, Enabled: routine.Enabled,
 		})
 	}
