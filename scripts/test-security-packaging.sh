@@ -55,6 +55,7 @@ bash -n "${project_root}/scripts/backup-server.sh"
 bash -n "${project_root}/scripts/restore-server-backup.sh"
 bash -n "${project_root}/scripts/update-server.sh"
 bash -n "${project_root}/scripts/publish-server.sh"
+bash -n "${project_root}/scripts/publish-admin-ui.sh"
 grep -Fqx 'USER tempo-server:tempo-server' "${dockerfile}"
 if grep -Eq 'server/web/(templates|static)' "${dockerfile}"; then
   echo "erro: imagem da API ainda copia o frontend" >&2

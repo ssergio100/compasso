@@ -13,10 +13,12 @@ import (
 )
 
 type fakeSessions struct {
-	sessions     []session.Session
-	lockRequests []string
-	locked       map[string]bool
-	lockErr      error
+	sessions       []session.Session
+	lockRequests   []string
+	unlockRequests []string
+	locked         map[string]bool
+	lockErr        error
+	unlockErr      error
 }
 
 type fakeSynchronizationSource struct {
@@ -25,10 +27,11 @@ type fakeSynchronizationSource struct {
 	online                 bool
 	paused                 bool
 	blocked                bool
+	revision               int64
 }
 
-func (f *fakeSynchronizationSource) RemoteControl() (bool, bool, bool) {
-	return f.online, f.paused, f.blocked
+func (f *fakeSynchronizationSource) RemoteControl() (bool, bool, bool, int64) {
+	return f.online, f.paused, f.blocked, f.revision
 }
 
 func TestRemoteControlIsIgnoredOfflineWhileLocalPolicyRemainsActive(t *testing.T) {
@@ -78,6 +81,90 @@ func TestRemoteControlIsIgnoredOfflineWhileLocalPolicyRemainsActive(t *testing.T
 	}
 }
 
+func TestRemoteBlockAndClearCompleteOnlyAfterGraphicalEffect(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 27, 12, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, testPolicy(1, start.Weekday(), time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveConfirmedSessionState(ctx, storage.ConfirmedSessionState{
+		Revision: 1, SessionID: "3", LocalDate: start.Format("2006-01-02"),
+		RemainingSeconds: 3600, ConfirmedAt: start,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sessions := graphicalFake()
+	synchronization := &fakeSynchronizationSource{online: true, blocked: true, revision: 2}
+	policyDaemon, _ := New(store, sessions, "child", time.Second)
+	policyDaemon.SetSynchronizationSource(synchronization)
+	if err := store.StageControlEffect(ctx, "block-2", 2, "block_now", start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyDaemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.lockRequests) != 1 {
+		t.Fatalf("block requests=%v", sessions.lockRequests)
+	}
+	if ids, _ := store.AppliedCommandIDs(ctx, 10); len(ids) != 0 {
+		t.Fatalf("block acknowledged before observation: %v", ids)
+	}
+	if _, err := policyDaemon.Step(ctx, start.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := store.AppliedCommandIDs(ctx, 10); len(ids) != 1 || ids[0] != "block-2" {
+		t.Fatalf("confirmed block acknowledgements=%v", ids)
+	}
+
+	synchronization.blocked, synchronization.revision = false, 3
+	if err := store.StageControlEffect(ctx, "clear-3", 3, "clear_manual_block", start.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyDaemon.Step(ctx, start.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.unlockRequests) != 1 || sessions.unlockRequests[0] != "3" {
+		t.Fatalf("unlock requests=%v", sessions.unlockRequests)
+	}
+	if ids, _ := store.AppliedCommandIDs(ctx, 10); len(ids) != 1 {
+		t.Fatalf("clear acknowledged before observation: %v", ids)
+	}
+	if _, err := policyDaemon.Step(ctx, start.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := store.AppliedCommandIDs(ctx, 10); len(ids) != 2 {
+		t.Fatalf("confirmed clear acknowledgements=%v", ids)
+	}
+}
+
+func TestRemoteBlockWaitsForGraphicalSession(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	defer store.Close()
+	start := time.Date(2026, time.August, 27, 12, 0, 0, 0, time.Local)
+	if err := store.ReplacePolicy(ctx, testPolicy(1, start.Weekday(), time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	sessions := &fakeSessions{}
+	synchronization := &fakeSynchronizationSource{online: true, blocked: true, revision: 2}
+	policyDaemon, _ := New(store, sessions, "child", time.Second)
+	policyDaemon.SetSynchronizationSource(synchronization)
+	if err := store.StageControlEffect(ctx, "block-2", 2, "block_now", start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policyDaemon.Step(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := store.AppliedCommandIDs(ctx, 10); len(ids) != 0 {
+		t.Fatalf("sessionless block was acknowledged: %v", ids)
+	}
+	if _, available, err := store.PendingControlEffect(ctx); err != nil || !available {
+		t.Fatalf("sessionless block pending=%t err=%v", available, err)
+	}
+}
+
 func (f *fakeSynchronizationSource) SetGraphicalSession(active bool, sessionID string, _ bool) {
 	f.graphicalSessionActive = active
 	f.graphicalSessionID = sessionID
@@ -96,6 +183,18 @@ func (f *fakeSessions) Lock(_ context.Context, current session.Session) error {
 		f.locked = make(map[string]bool)
 	}
 	f.locked[current.ID] = true
+	return nil
+}
+
+func (f *fakeSessions) Unlock(_ context.Context, current session.Session) error {
+	f.unlockRequests = append(f.unlockRequests, current.ID)
+	if f.unlockErr != nil {
+		return f.unlockErr
+	}
+	if f.locked == nil {
+		f.locked = make(map[string]bool)
+	}
+	f.locked[current.ID] = false
 	return nil
 }
 

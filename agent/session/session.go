@@ -36,5 +36,6 @@ func (s Session) IsLocalGraphical() bool {
 type Manager interface {
 	Sessions(context.Context, string) ([]Session, error)
 	Lock(context.Context, Session) error
+	Unlock(context.Context, Session) error
 	IsLocked(context.Context, Session) (bool, error)
 }

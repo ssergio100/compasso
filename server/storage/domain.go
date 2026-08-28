@@ -68,6 +68,23 @@ func (s *Store) LoadControl(ctx context.Context, deviceID string) (Control, erro
 	return s.loadControl(ctx, deviceID)
 }
 
+// PendingControlKind returns the latest control transition that has not yet
+// been acknowledged by the agent. An empty kind means there is no transition
+// in flight.
+func (s *Store) PendingControlKind(ctx context.Context, deviceID string) (string, error) {
+	var kind string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT kind FROM device_command
+		WHERE device_id=? AND acknowledged_at IS NULL AND kind IN (
+			'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+		)
+		ORDER BY created_at DESC, id DESC LIMIT 1`, deviceID).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return kind, err
+}
+
 type Routine struct {
 	ID      string
 	Name    string

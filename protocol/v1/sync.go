@@ -7,11 +7,12 @@ import (
 )
 
 const (
-	HeartbeatPath           = "/api/v1/device/heartbeat"
-	VersionHeader           = "X-Compasso-Protocol-Version"
-	CapabilitiesHeader      = "X-Compasso-Capabilities"
-	NextHeartbeatCapability = "next-heartbeat-seconds"
-	CurrentProtocolVersion  = "2"
+	HeartbeatPath               = "/api/v1/device/heartbeat"
+	VersionHeader               = "X-Compasso-Protocol-Version"
+	CapabilitiesHeader          = "X-Compasso-Capabilities"
+	NextHeartbeatCapability     = "next-heartbeat-seconds"
+	CommandAckReceiptCapability = "command-ack-receipts"
+	CurrentProtocolVersion      = "2"
 )
 
 type HeartbeatRequest struct {
@@ -41,6 +42,7 @@ type HeartbeatResponse struct {
 	ServerTime           time.Time     `json:"server_time"`
 	NextHeartbeatSeconds int64         `json:"next_heartbeat_seconds,omitempty"`
 	AcknowledgedEvents   []string      `json:"acknowledged_events,omitempty"`
+	AcknowledgedCommands []string      `json:"acknowledged_commands,omitempty"`
 	Policy               *Policy       `json:"policy,omitempty"`
 	SessionState         *SessionState `json:"session_state,omitempty"`
 	Commands             []Command     `json:"commands,omitempty"`

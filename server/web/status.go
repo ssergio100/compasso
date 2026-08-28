@@ -36,6 +36,10 @@ func (a *App) loadDeviceLiveStatus(ctx context.Context, deviceID string) (storag
 	if err != nil {
 		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
 	}
+	pendingControlKind, err := a.store.PendingControlKind(ctx, deviceID)
+	if err != nil {
+		return storage.Device{}, storage.Policy{}, deviceLiveStatus{}, err
+	}
 	now := a.now()
 	localDate := now.Format("2006-01-02")
 	online := isOnline(device.LastSeenAt, now, a.onlineTimeout)
@@ -95,13 +99,21 @@ func (a *App) loadDeviceLiveStatus(ctx context.Context, deviceID string) (storag
 	switch {
 	case !online:
 		liveStatus.ControlStatus = "offline"
-	case control.MonitoringPaused && device.AppliedControlRevision < control.Revision:
+	case pendingControlKind == "pause_monitoring":
 		liveStatus.ControlStatus = "pause_requested"
+	case pendingControlKind == "resume_monitoring":
+		liveStatus.ControlStatus = "resume_requested"
+	case pendingControlKind == "block_now":
+		liveStatus.ControlStatus = "block_requested"
+	case pendingControlKind == "clear_manual_block":
+		liveStatus.ControlStatus = "unblock_requested"
 	case control.MonitoringPaused:
 		liveStatus.ControlStatus = "paused"
 	case control.ManualBlock && (!device.GraphicalSessionLocked || device.AppliedControlRevision < control.Revision):
 		liveStatus.ControlStatus = "block_requested"
 	case control.ManualBlock:
+		liveStatus.ControlStatus = "blocked"
+	case device.GraphicalSessionLocked:
 		liveStatus.ControlStatus = "blocked"
 	default:
 		liveStatus.ControlStatus = "active"

@@ -69,10 +69,10 @@ type Client struct {
 	statusReporter         func(error)
 }
 
-func (c *Client) RemoteControl() (online, paused, blocked bool) {
+func (c *Client) RemoteControl() (online, paused, blocked bool, revision int64) {
 	c.controlMu.RLock()
 	defer c.controlMu.RUnlock()
-	return c.controlOnline, c.controlPaused, c.controlBlocked
+	return c.controlOnline, c.controlPaused, c.controlBlocked, c.controlRevision
 }
 
 // SynchronizationStatus reports whether a heartbeat attempt completed and
@@ -231,7 +231,8 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 	httpRequest.Header.Set("Authorization", "Bearer "+c.config.DeviceToken)
 	httpRequest.Header.Set("X-Tempo-Device-ID", c.config.DeviceID)
 	httpRequest.Header.Set(protocol.VersionHeader, protocol.CurrentProtocolVersion)
-	httpRequest.Header.Set(protocol.CapabilitiesHeader, protocol.NextHeartbeatCapability)
+	httpRequest.Header.Set(protocol.CapabilitiesHeader,
+		protocol.NextHeartbeatCapability+", "+protocol.CommandAckReceiptCapability)
 	stage = "transport"
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
@@ -257,6 +258,9 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 		if err := c.store.AcknowledgeEvent(ctx, eventID); err != nil {
 			return protocol.HeartbeatResponse{}, err
 		}
+	}
+	if err := c.store.ForgetAppliedCommandIDs(ctx, result.AcknowledgedCommands); err != nil {
+		return protocol.HeartbeatResponse{}, fmt.Errorf("forget acknowledged commands: %w", err)
 	}
 	if result.Policy != nil {
 		if err := c.store.ReplacePolicy(ctx, fromProtocolPolicy(*result.Policy)); err != nil {
@@ -290,11 +294,12 @@ func (c *Client) Heartbeat(ctx context.Context, now time.Time) (result protocol.
 			return protocol.HeartbeatResponse{}, fmt.Errorf("store confirmed session state: %w", err)
 		}
 	}
-	// A command acknowledgement is evidence that every authoritative state in
-	// the same response was durably installed. In particular, a bonus command
-	// must not be acknowledged while an older balance anchor is still active.
+	// Install the authoritative state before handling its commands. Bonus
+	// commands become acknowledgeable now; control commands are only staged and
+	// the daemon acknowledges them after observing the requested graphical
+	// effect.
 	for _, command := range result.Commands {
-		if err := c.applyCommand(ctx, command, request.LocalDate, now); err != nil {
+		if err := c.applyCommand(ctx, command, result.Control.Revision, request.LocalDate, now); err != nil {
 			return protocol.HeartbeatResponse{}, fmt.Errorf("apply command %s: %w", command.ID, err)
 		}
 	}
@@ -339,15 +344,13 @@ func redactSensitiveText(message, secret string) string {
 	return strings.ReplaceAll(message, secret, "[REDACTED]")
 }
 
-func (c *Client) applyCommand(ctx context.Context, command protocol.Command, localDate string, now time.Time) error {
+func (c *Client) applyCommand(ctx context.Context, command protocol.Command, controlRevision int64, localDate string, now time.Time) error {
 	if command.ID == "" || command.CreatedAt.IsZero() {
 		return errors.New("invalid command envelope")
 	}
 	switch command.Kind {
 	case "pause_monitoring", "resume_monitoring", "block_now", "clear_manual_block":
-		// These states are carried by the authoritative policy revision. Recording
-		// the command makes delivery idempotent and acknowledges it next cycle.
-		return c.store.RecordCommandApplied(ctx, command.ID, now)
+		return c.store.StageControlEffect(ctx, command.ID, controlRevision, command.Kind, now)
 	case "add_bonus":
 		var payload protocol.CreditIncrementPayload
 		if err := json.Unmarshal(command.Payload, &payload); err != nil {

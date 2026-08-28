@@ -561,15 +561,114 @@ func TestLiveStatusDistinguishesRequestedFromConfirmedBlock(t *testing.T) {
 	if err != nil || requested.ControlStatus != "block_requested" || requested.ActualState != "unblocked" {
 		t.Fatalf("requested status=%+v err=%v", requested, err)
 	}
+	if len(response.Commands) != 1 {
+		t.Fatalf("block command was not offered: %+v", response.Commands)
+	}
 	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
 		PolicyRevision: 1, ControlRevision: response.Control.Revision, LocalDate: "2026-08-10",
 		GraphicalSessionActive: true, GraphicalSessionLocked: true, GraphicalSessionID: "session-9",
+		CommandAcks: []string{response.Commands[0].ID},
 	}, fixture.now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	_, _, confirmed, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
 	if err != nil || confirmed.ControlStatus != "blocked" || confirmed.ActualState != "blocked" {
 		t.Fatalf("confirmed status=%+v err=%v", confirmed, err)
+	}
+}
+
+func TestLiveStatusNamesReverseControlTransitions(t *testing.T) {
+	fixture := newWebFixture(t, false, time.Hour)
+	defer fixture.store.Close()
+	ctx := context.Background()
+	device, err := fixture.store.CreateDevice(ctx, "Zorin", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, LocalDate: "2026-08-10", GraphicalSessionActive: true,
+		GraphicalSessionID: "session-9",
+	}, fixture.now); err != nil {
+		t.Fatal(err)
+	}
+	blockID, err := fixture.store.QueueControlOperation(ctx, device.ID, "block_now", fixture.now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := fixture.store.LoadControl(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, ControlRevision: control.Revision, LocalDate: "2026-08-10",
+		GraphicalSessionActive: true, GraphicalSessionLocked: true, GraphicalSessionID: "session-9",
+		CommandAcks: []string{blockID},
+	}, fixture.now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	clearID, err := fixture.store.QueueControlOperation(ctx, device.ID, "clear_manual_block", fixture.now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, unlocking, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || unlocking.ControlStatus != "unblock_requested" || unlocking.ActualState != "blocked" {
+		t.Fatalf("unlocking status=%+v err=%v", unlocking, err)
+	}
+	control, err = fixture.store.LoadControl(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, ControlRevision: control.Revision, LocalDate: "2026-08-10",
+		GraphicalSessionActive: true, GraphicalSessionID: "session-9", CommandAcks: []string{clearID},
+	}, fixture.now.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, active, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || active.ControlStatus != "active" || active.ActualState != "unblocked" {
+		t.Fatalf("active status after unlock=%+v err=%v", active, err)
+	}
+
+	pauseID, err := fixture.store.QueueControlOperation(ctx, device.ID, "pause_monitoring", fixture.now.Add(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, pausing, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || pausing.ControlStatus != "pause_requested" {
+		t.Fatalf("pausing status=%+v err=%v", pausing, err)
+	}
+	control, err = fixture.store.LoadControl(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, ControlRevision: control.Revision, LocalDate: "2026-08-10",
+		GraphicalSessionActive: true, GraphicalSessionID: "session-9", CommandAcks: []string{pauseID},
+	}, fixture.now.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	resumeID, err := fixture.store.QueueControlOperation(ctx, device.ID, "resume_monitoring", fixture.now.Add(7*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, resuming, err := fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || resuming.ControlStatus != "resume_requested" {
+		t.Fatalf("resuming status=%+v err=%v", resuming, err)
+	}
+	control, err = fixture.store.LoadControl(ctx, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: 1, ControlRevision: control.Revision, LocalDate: "2026-08-10",
+		GraphicalSessionActive: true, GraphicalSessionID: "session-9", CommandAcks: []string{resumeID},
+	}, fixture.now.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, active, err = fixture.app.loadDeviceLiveStatus(ctx, device.ID)
+	if err != nil || active.ControlStatus != "active" {
+		t.Fatalf("active status after resume=%+v err=%v", active, err)
 	}
 }
 
@@ -658,6 +757,27 @@ func TestHeartbeatIntervalIsSentOnlyToCapableAgentsAndChangesGlobally(t *testing
 	decodeResponse(t, capableResponse, &heartbeatResponse)
 	if heartbeatResponse.NextHeartbeatSeconds != 9 {
 		t.Fatalf("next heartbeat seconds=%d, want updated global value", heartbeatResponse.NextHeartbeatSeconds)
+	}
+
+	operationID, err := fixture.store.QueueControlOperation(context.Background(), device.ID, "block_now", fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ = json.Marshal(protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: fixture.now.Format("2006-01-02"),
+		CommandAcks: []string{operationID},
+	})
+	legacyAckResponse := request("")
+	var legacyAckPayload map[string]json.RawMessage
+	decodeResponse(t, legacyAckResponse, &legacyAckPayload)
+	if _, exists := legacyAckPayload["acknowledged_commands"]; exists {
+		t.Fatal("server sent command acknowledgement receipts to an incapable agent")
+	}
+	capableAckResponse := request(protocol.CommandAckReceiptCapability)
+	var capableAckPayload map[string]json.RawMessage
+	decodeResponse(t, capableAckResponse, &capableAckPayload)
+	if _, exists := capableAckPayload["acknowledged_commands"]; !exists {
+		t.Fatal("server omitted command acknowledgement receipts for a capable agent")
 	}
 }
 

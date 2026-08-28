@@ -1,6 +1,6 @@
 # Tarefa — extração de componentes do frontend administrativo
 
-**Status:** pendente.
+**Status:** concluída em 26/08/2026, com testes dispensados nesta execução.
 
 **Interface vigente:** `admin-ui`.
 
@@ -69,6 +69,21 @@ arquivo só deve ser extraído quando passar a possuir uma responsabilidade clar
 6. Avaliar, somente depois das extrações, se o carregamento e as mutações de
    dispositivos justificam um hook próprio. Não introduzir biblioteca global de
    estado sem necessidade comprovada.
+
+## Resultado da execução
+
+- As regras puras de horários, intervalos, conflitos e segmentos foram movidas
+  para `features/routines/routineSchedule.ts`.
+- Formulários, páginas e navegação foram separados por funcionalidade, mantendo
+  o estado compartilhado e as mutações coordenados por `App.tsx`.
+- A conexão SSE foi movida para `hooks/useDeviceStream.ts`; notificações foram
+  centralizadas em `hooks/useNotifications.ts`.
+- O carregamento e as mutações de computadores permaneceram em `App.tsx`. A
+  avaliação não encontrou reutilização ou independência suficiente para
+  justificar outro hook nesta etapa.
+- Por solicitação do usuário, não foram criados nem executados testes unitários
+  ou fluxos automatizados em navegador. A validação desta execução ficou
+  restrita a tipos, build e verificação do diff.
 
 ## Regras da refatoração
 

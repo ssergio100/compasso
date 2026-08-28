@@ -27,8 +27,8 @@ import study from "./assets/illustrations/routines/study.webp";
 
 export const avatars: { key: AvatarKey; label: string; src: string }[] = [
   { key: "cat", label: "Gato", src: cat }, { key: "dog", label: "Cachorro", src: dog },
-  { key: "fox", label: "Raposa", src: fox }, { key: "rabbit", label: "Coelho", src: rabbit },
-  { key: "panda", label: "Panda", src: panda }, { key: "owl", label: "Coruja", src: owl },
+  { key: "fox", label: "Raposa", src: fox }, { key: "rabbit", label: "Leão", src: rabbit },
+  { key: "panda", label: "Coala", src: panda }, { key: "owl", label: "Coruja", src: owl },
   { key: "penguin", label: "Pinguim", src: penguin }, { key: "capybara", label: "Capivara", src: capybara },
   { key: "cat_bow", label: "Gatinha", src: catBow }, { key: "rabbit_flower", label: "Coelhinha", src: rabbitFlower },
   { key: "panda_flower", label: "Panda floral", src: pandaFlower }, { key: "fox_bow", label: "Raposinha", src: foxBow },

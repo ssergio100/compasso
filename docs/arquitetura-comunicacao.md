@@ -377,7 +377,8 @@ O servidor sempre envia `control`. Os demais campos são condicionais:
 - `acknowledged_events`: eventos locais aceitos nesta requisição;
 - `policy`: política completa quando a revisão do agente está atrasada;
 - `session_state`: âncora de saldo quando solicitada ou desatualizada;
-- `commands`: até 100 comandos ainda não reconhecidos.
+- `commands`: até 100 comandos ainda não reconhecidos; bônus são cumulativos,
+  enquanto existe no máximo um comando de controle pendente por dispositivo.
 
 ### 7.3 Compatibilidade
 
@@ -424,19 +425,28 @@ heartbeat é rejeitado com `409`.
 
 Pausa e bloqueio manual usam `device_control`, com revisão própria:
 
-- `pause_monitoring`: pausa e libera sem contar tempo;
-- `resume_monitoring`: remove a pausa;
+- `pause_monitoring`: pausa, remove bloqueio manual, desbloqueia a sessão e
+  libera sem contar tempo;
+- `resume_monitoring`: retorna ao estado ativo;
 - `block_now`: remove a pausa e ativa bloqueio manual;
-- `clear_manual_block`: remove bloqueio manual.
+- `clear_manual_block`: retorna ao estado ativo e desbloqueia a sessão quando
+  a política local também permite acesso.
 
 O servidor atualiza o estado desejado e incrementa `control.revision` na mesma
 transação que cria o comando. A resposta de todo heartbeat leva o snapshot
-atual de controle.
+atual de controle. Pausa e bloqueio são mutuamente exclusivos; o controle
+representa sempre um entre os estados ativo, pausado ou bloqueado.
 
 O controle é `online-only`: depois de falha de heartbeat, o cliente marca o
 controle remoto como indisponível e não conserva o snapshot remoto apenas em
 memória como prova de autoridade online. A política local durável continua
 operando.
+
+Conectividade e sessão gráfica são dimensões independentes. Encerrar a sessão
+do usuário não encerra o serviço do agente: o computador continua online e
+trocando heartbeats, mas informa `graphical_session_active=false`. Um bloqueio
+remoto permanece pendente até existir uma sessão que possa ser observada como
+bloqueada.
 
 ### 8.3 Âncora de sessão e saldo
 
@@ -480,8 +490,8 @@ data local informada pelo agente, não a data civil do servidor.
 | Alterar cotas/aviso | política + revisão | política no heartbeat | **atualmente transação do servidor** |
 | Criar/alterar/excluir rotina | política + revisão | política no heartbeat | **atualmente transação do servidor** |
 | Alterar senha local | política + revisão | política no heartbeat | **atualmente transação do servidor** |
-| Pausar/retomar | controle + comando | heartbeat | `command_ack` |
-| Bloquear/desbloquear | controle + comando | heartbeat | `command_ack` |
+| Pausar/retomar | controle + comando | heartbeat | controle aplicado e efeito gráfico confirmado |
+| Bloquear/desbloquear | controle + comando | heartbeat | `LockedHint` confirmou o estado solicitado |
 | Bônus remoto | comando + revisão + bônus | heartbeat | `command_ack` |
 | Bônus local | evento durável do agente | heartbeat | aceite em `acknowledged_events` |
 
@@ -506,7 +516,7 @@ ADM                 Servidor                 Agente
  │                     │ o comando na resposta  │
  │                     ├──── comando ──────────►│
  │◄── activity_updated: offered                 │
- │                     │                        │ grava aplicação
+ │                     │                        │ executa e observa efeito
  │                     │◄─ heartbeat + ack ─────┤
  │                     │ marca concluído        │
  │◄── activity_updated: completed               │
@@ -522,15 +532,22 @@ Regras:
    `offered/server`.
 4. A contagem ocorre antes de o corpo HTTP chegar ao agente. Portanto a frase
    correta é “o servidor incluiu/ofereceu”, não “o computador recebeu”.
-5. O agente persiste a aplicação antes de guardar o ID em `applied_command`.
-6. IDs aplicados são reenviados em heartbeats posteriores, tornando perda de
-   resposta inofensiva.
+5. Para controles, o agente mantém a operação pendente até observar o efeito:
+   bloqueado para `block_now`, desbloqueado para `clear_manual_block` e
+   `pause_monitoring`. Sem sessão gráfica, o bloqueio aguarda uma sessão.
+6. Somente depois do efeito o ID entra em `applied_command` e é reenviado no
+   heartbeat, tornando perda de resposta inofensiva.
 7. O servidor usa `COALESCE(acknowledged_at, agora)`: confirmações repetidas
    não alteram a primeira conclusão.
-8. Confirmação histórica sem comando correspondente é ignorada e não rejeita o
-   heartbeat. Isso permite retenção, reparo e restauração.
+8. Confirmação histórica sem comando correspondente é aceita e devolvida ao
+   agente quando ele anuncia a capacidade `command-ack-receipts`. Isso permite
+   ao agente remover IDs já recebidos pelo servidor sem quebrar clientes
+   antigos.
 9. A atividade muda para `completed`, ganha etapa `completed/device` e expira
    30 dias depois.
+10. Depois do ack, o envelope de um controle é removido de `device_command`;
+    sua atividade temporária continua disponível. O comando de bônus permanece
+    durável porque representa uma operação cumulativa.
 
 ### 9.3 Bônus remoto
 
@@ -565,8 +582,18 @@ Comandos de controle não carregam payload de negócio: o estado autoritativo é
 o snapshot `control` da mesma resposta. O comando fornece correlação e prova
 idempotente de aplicação.
 
-O agente registra o ID como aplicado apenas depois de processar a resposta que
-também trouxe o controle desejado. O ack chega no ciclo seguinte.
+Controle não é uma fila de tarefas. Uma solicitação idêntica reutiliza a
+operação ainda pendente; uma solicitação diferente substitui o comando e a
+atividade pendentes anteriores. Assim, apenas a intenção mais recente será
+oferecida quando o computador sincronizar. `add_bonus` não participa dessa
+compactação, pois vários bônus devem ser somados.
+
+O agente primeiro persiste o comando recebido como efeito pendente. Para
+`block_now`, o ID só se torna reconhecível depois de `logind` informar a sessão
+gráfica bloqueada. Para `clear_manual_block` e `pause_monitoring`, isso ocorre
+depois de a sessão informar desbloqueio (ou imediatamente se já não existir
+sessão gráfica). O ack segue em um heartbeat posterior; até lá, a interface
+continua mostrando a transição correspondente.
 
 ### 9.5 Alterações de política
 
@@ -711,9 +738,10 @@ carrega ack de sucesso. O agente não envia resultado estruturado de falha
 definitiva; por isso esses estados ainda não descrevem toda falha local
 possível.
 
-Limpar ações concluídas preenche `hidden_at`. Não remove bônus, comandos,
-configurações ou pedidos pendentes. Atividades concluídas são removidas
-fisicamente após 30 dias; a manutenção roda no máximo uma vez por hora.
+Limpar ações concluídas preenche `hidden_at`. Não remove bônus, configurações
+ou pedidos pendentes. Atividades concluídas são removidas fisicamente após 30
+dias; a manutenção roda no máximo uma vez por hora. Envelopes de controle já
+confirmados são descartados imediatamente, sem apagar essa atividade humana.
 
 ### 12.3 Auditoria
 
@@ -794,16 +822,19 @@ não deve repetir automaticamente uma mutação ambígua.
 Uma reprodução compatível deve preservar estas regras:
 
 1. UUID de evento local é chave única no agente e no servidor.
-2. ID de comando é chave única em `device_command`, `applied_command` e na
-   atividade correspondente.
+2. O ID da operação é compartilhado pelo envelope de comando, pela confirmação
+   em `applied_command` e pela atividade correspondente; o envelope de controle
+   pode ser descartado depois do ack.
 3. Aplicar bônus remoto e registrar comando aplicado é uma transação local.
-4. Criar comando, alterar estado desejado, auditar e criar atividade é uma
-   transação no servidor.
+4. Criar ou substituir comando de controle, alterar estado desejado e criar sua
+   atividade é uma transação no servidor.
 5. Uso diário central nunca diminui por heartbeat atrasado.
 6. Política só é substituída por revisão completa válida.
 7. Evento pendente só sai da fila após confirmação explícita.
-8. Comando permanece pendente no servidor até ack.
-9. Comandos são oferecidos por `created_at, id`, no máximo 100 por resposta.
+8. Bônus permanece pendente até ack; para controle, somente a intenção mais
+   recente permanece pendente e seu envelope é descartado depois do ack.
+9. Comandos são oferecidos por `created_at, id`, no máximo 100 por resposta e
+   no máximo um deles é controle do dispositivo.
 10. Eventos são enviados pelo agente em ordem de criação, no máximo 100.
 11. `INSERT OR IGNORE` ou equivalente deve tornar repetição inofensiva.
 12. Falha na projeção humana não deve impedir entrega de comando já válido; o
@@ -837,7 +868,8 @@ Uma implementação equivalente precisa manter:
 - política, cotas, rotinas e dias;
 - controle e revisões desejadas/aplicadas;
 - uso diário e bônus;
-- comandos, ack, tentativas e horários de oferta;
+- bônus pendentes e a última intenção de controle, com ack, tentativas e
+  horários de oferta;
 - auditoria funcional;
 - atividade humana e suas etapas;
 - diagnóstico técnico e configuração de retenção;

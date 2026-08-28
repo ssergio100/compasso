@@ -264,8 +264,106 @@ func TestRemoteControlDoesNotBecomeOfflinePolicy(t *testing.T) {
 	heartbeat, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
 		PolicyRevision: before.Revision, LocalDate: "2026-08-10",
 	}, now.Add(2*time.Second))
-	if err != nil || !heartbeat.Control.ManualBlock || !heartbeat.Control.MonitoringPaused {
+	if err != nil || heartbeat.Control.ManualBlock || !heartbeat.Control.MonitoringPaused ||
+		len(heartbeat.Commands) != 1 || heartbeat.Commands[0].Kind != "pause_monitoring" {
 		t.Fatalf("heartbeat control=%+v err=%v", heartbeat.Control, err)
+	}
+}
+
+func TestControlQueueKeepsOnlyLatestDesiredState(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Trabalho", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pauseID, err := store.QueueControlOperation(ctx, device.ID, "pause_monitoring", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicateID, err := store.QueueControlOperation(ctx, device.ID, "pause_monitoring", now.Add(2*time.Second))
+	if err != nil || duplicateID != pauseID {
+		t.Fatalf("duplicate pause id=%q want=%q err=%v", duplicateID, pauseID, err)
+	}
+	control, err := store.LoadControl(ctx, device.ID)
+	if err != nil || control.Revision != 2 || !control.MonitoringPaused || control.ManualBlock {
+		t.Fatalf("duplicate pause changed control=%+v err=%v", control, err)
+	}
+	blockID, err := store.QueueControlOperation(ctx, device.ID, "block_now", now.Add(3*time.Second))
+	if err != nil || blockID == pauseID {
+		t.Fatalf("replacement block id=%q old=%q err=%v", blockID, pauseID, err)
+	}
+	if _, err := store.LoadDeviceActivity(ctx, device.ID, pauseID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("superseded pause activity remained: %v", err)
+	}
+
+	response, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-24",
+	}, now.Add(4*time.Second))
+	if err != nil || len(response.Commands) != 1 || response.Commands[0].ID != blockID ||
+		response.Control.MonitoringPaused || !response.Control.ManualBlock {
+		t.Fatalf("latest block response=%+v err=%v", response, err)
+	}
+
+	latestPauseID, err := store.QueueControlOperation(ctx, device.ID, "pause_monitoring", now.Add(5*time.Second))
+	if err != nil || latestPauseID == blockID {
+		t.Fatalf("replacement pause id=%q old=%q err=%v", latestPauseID, blockID, err)
+	}
+	if _, err := store.LoadDeviceActivity(ctx, device.ID, blockID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("superseded offered block activity remained: %v", err)
+	}
+	response, err = store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-24",
+	}, now.Add(6*time.Second))
+	if err != nil || len(response.Commands) != 1 || response.Commands[0].ID != latestPauseID ||
+		!response.Control.MonitoringPaused || response.Control.ManualBlock {
+		t.Fatalf("latest pause response=%+v err=%v", response, err)
+	}
+
+	var controlAudits int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM audit_event
+		WHERE device_id=? AND kind IN (
+			'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+		)`, device.ID).Scan(&controlAudits); err != nil || controlAudits != 0 {
+		t.Fatalf("control audit count=%d err=%v", controlAudits, err)
+	}
+}
+
+func TestAcknowledgedControlCommandKeepsActivityAndDeletesEnvelope(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	device, err := store.CreateDevice(ctx, "Trabalho", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandID, err := store.QueueControlOperation(ctx, device.ID, "block_now", now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-24",
+	}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReceiveHeartbeat(ctx, device.ID, protocol.HeartbeatRequest{
+		PolicyRevision: device.PolicyRevision, LocalDate: "2026-08-24", CommandAcks: []string{commandID},
+	}, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var envelopes int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM device_command WHERE id=?`, commandID).Scan(&envelopes); err != nil || envelopes != 0 {
+		t.Fatalf("acknowledged control envelope count=%d err=%v", envelopes, err)
+	}
+	activity, err := store.LoadDeviceActivity(ctx, device.ID, commandID)
+	if err != nil || activity.Status != "completed" || findActivityStep(activity.Steps, "completed") == nil {
+		t.Fatalf("completed control activity=%+v err=%v", activity, err)
 	}
 }
 

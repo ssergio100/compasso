@@ -185,10 +185,12 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		}
 		acknowledged = append(acknowledged, event.UUID)
 	}
+	acknowledgedCommands := make([]string, 0, len(request.CommandAcks))
 	for _, commandID := range request.CommandAcks {
 		if !validOpaqueIdentifier(commandID) {
 			return protocol.HeartbeatResponse{}, errors.New("invalid command acknowledgement")
 		}
+		acknowledgedCommands = append(acknowledgedCommands, commandID)
 		commandResult, err := tx.ExecContext(ctx, `
 			UPDATE device_command SET acknowledged_at=COALESCE(acknowledged_at, ?)
 			WHERE id=? AND device_id=?`, stamp, commandID, deviceID)
@@ -220,10 +222,21 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		if err != nil {
 			return protocol.HeartbeatResponse{}, err
 		}
-		if matchedActivity == 0 {
-			continue
+		if matchedActivity != 0 {
+			if err := upsertActivityStep(ctx, tx, commandID, "completed", "device", now, nil, false); err != nil {
+				return protocol.HeartbeatResponse{}, err
+			}
 		}
-		if err := upsertActivityStep(ctx, tx, commandID, "completed", "device", now, nil, false); err != nil {
+		// Current agents acknowledge control only after observing its graphical
+		// effect. Legacy agents may acknowledge delivery alone. In either case the
+		// human-facing activity retains the result; keeping the transport envelope
+		// forever would make this table grow with every button press. Bonus commands
+		// remain durable because they carry an additive business operation.
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM device_command
+			WHERE id=? AND device_id=? AND kind IN (
+				'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+			)`, commandID, deviceID); err != nil {
 			return protocol.HeartbeatResponse{}, err
 		}
 	}
@@ -234,7 +247,9 @@ func (s *Store) ReceiveHeartbeat(ctx context.Context, deviceID string, request p
 		return protocol.HeartbeatResponse{}, err
 	}
 
-	response := protocol.HeartbeatResponse{ServerTime: now.UTC(), AcknowledgedEvents: acknowledged}
+	response := protocol.HeartbeatResponse{
+		ServerTime: now.UTC(), AcknowledgedEvents: acknowledged, AcknowledgedCommands: acknowledgedCommands,
+	}
 	control, err := s.loadControl(ctx, deviceID)
 	if err != nil {
 		return protocol.HeartbeatResponse{}, err
@@ -492,26 +507,61 @@ func (s *Store) QueueControlOperation(ctx context.Context, deviceID, kind string
 	setClause := ""
 	switch kind {
 	case "pause_monitoring":
-		setClause = "monitoring_paused=1"
+		setClause = "monitoring_paused=1, manual_block=0"
 	case "resume_monitoring":
-		setClause = "monitoring_paused=0"
+		setClause = "monitoring_paused=0, manual_block=0"
 	case "block_now":
 		setClause = "monitoring_paused=0, manual_block=1"
 	case "clear_manual_block":
-		setClause = "manual_block=0"
+		setClause = "monitoring_paused=0, manual_block=0"
 	default:
 		return "", errors.New("unknown device control")
-	}
-	commandID, err := newID()
-	if err != nil {
-		return "", err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	var pendingID, pendingKind string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, kind FROM device_command
+		WHERE device_id=? AND acknowledged_at IS NULL AND kind IN (
+			'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+		)
+		ORDER BY created_at DESC, id DESC LIMIT 1`, deviceID).Scan(&pendingID, &pendingKind)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	if err == nil && pendingKind == kind {
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
+		return pendingID, nil
+	}
+	commandID, err := newID()
+	if err != nil {
+		return "", err
+	}
 	stamp := formatTime(now)
+	// Remote control is a desired state, not an ordered job queue. Discard any
+	// older, unacknowledged control operation and its human-facing projection;
+	// additive bonus commands are intentionally not part of this compaction.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM activity WHERE id IN (
+			SELECT id FROM device_command
+			WHERE device_id=? AND acknowledged_at IS NULL AND kind IN (
+				'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+			)
+		)`, deviceID); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM device_command
+		WHERE device_id=? AND acknowledged_at IS NULL AND kind IN (
+			'pause_monitoring', 'resume_monitoring', 'block_now', 'clear_manual_block'
+		)`, deviceID); err != nil {
+		return "", err
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE device_control SET `+setClause+`, revision=revision+1, updated_at=? WHERE device_id=?`, stamp, deviceID)
 	if err != nil {
 		return "", err
@@ -524,9 +574,6 @@ func (s *Store) QueueControlOperation(ctx context.Context, deviceID, kind string
 		return "", err
 	}
 	if err := insertAdminActivity(ctx, tx, commandID, deviceID, kind, map[string]string{"command": kind}, now); err != nil {
-		return "", err
-	}
-	if err := insertAudit(ctx, tx, deviceID, kind, map[string]string{"status": "queued"}, now); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {

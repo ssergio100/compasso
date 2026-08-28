@@ -126,7 +126,7 @@ func TestLocalBonusBecomesOneHumanActivityAndSurvivesHistoryCleanup(t *testing.T
 	}
 }
 
-func TestEveryAdministrativeDeviceMutationCreatesHumanActivity(t *testing.T) {
+func TestEveryRetainedAdministrativeDeviceMutationCreatesHumanActivity(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)
 	defer store.Close()
@@ -184,13 +184,11 @@ func TestEveryAdministrativeDeviceMutationCreatesHumanActivity(t *testing.T) {
 		"device_created": 1, "device_renamed": 1, "quotas_updated": 1,
 		"routine_saved": 2, "routine_deleted": 1, "local_password_changed": 1,
 		"device_token_issued": 1, "device_token_revoked": 1,
-		"pause_monitoring": 1, "resume_monitoring": 1, "block_now": 1,
 		"clear_manual_block": 1, "add_bonus": 1,
 	}
 	got := map[string]int{}
 	dedicatedLifecycle := map[string]bool{
-		"add_bonus": true, "pause_monitoring": true, "resume_monitoring": true,
-		"block_now": true, "clear_manual_block": true,
+		"add_bonus": true, "clear_manual_block": true,
 	}
 	for _, activity := range activities {
 		got[activity.Kind]++
@@ -206,8 +204,8 @@ func TestEveryAdministrativeDeviceMutationCreatesHumanActivity(t *testing.T) {
 			t.Errorf("activity kind %q count=%d want=%d; all=%+v", kind, got[kind], count, got)
 		}
 	}
-	if len(activities) != 14 {
-		t.Fatalf("administrative activity total=%d want=14; kinds=%+v", len(activities), got)
+	if len(activities) != 11 {
+		t.Fatalf("administrative activity total=%d want=11; kinds=%+v", len(activities), got)
 	}
 }
 

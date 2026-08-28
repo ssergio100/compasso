@@ -172,6 +172,20 @@ func (l *Logind) Lock(ctx context.Context, current Session) error {
 	return commandError("lock session "+current.ID, output, err)
 }
 
+// Unlock asks logind to release the graphical lock without ending the session.
+func (l *Logind) Unlock(ctx context.Context, current Session) error {
+	if err := validateSessionID(current.ID); err != nil {
+		return err
+	}
+	unlockContext, cancel := context.WithTimeout(ctx, sessionLockTimeout)
+	defer cancel()
+	output, err := l.executeCommand(unlockContext, l.path, "unlock-session", current.ID)
+	if err == nil {
+		return nil
+	}
+	return commandError("unlock session "+current.ID, output, err)
+}
+
 // IsLocked reports logind's confirmed lock state for the session.
 func (l *Logind) IsLocked(ctx context.Context, current Session) (bool, error) {
 	if err := validateSessionID(current.ID); err != nil {

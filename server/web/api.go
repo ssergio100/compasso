@@ -142,6 +142,9 @@ func (a *App) handleHeartbeat(w http.ResponseWriter, r *http.Request, details ma
 		response.NextHeartbeatSeconds = int64(a.heartbeatInterval / time.Second)
 		details["next_heartbeat_seconds"] = strconv.FormatInt(response.NextHeartbeatSeconds, 10)
 	}
+	if !requestHasCapability(r, protocol.CommandAckReceiptCapability) {
+		response.AcknowledgedCommands = nil
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	details["policy_sent"] = strconv.FormatBool(response.Policy != nil)

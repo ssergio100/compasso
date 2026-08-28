@@ -716,6 +716,7 @@ func (a *App) adminDeviceCommandAPI(w http.ResponseWriter, r *http.Request, curr
 	addCommunicationDetail(r, "command", request.Command)
 	addCommunicationDetail(r, "operation_id", operationID)
 	a.publishDeviceActivity(deviceID, operationID)
+	a.publishActivitiesChanged(deviceID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": "command queued", "operation_id": operationID})
 }
 

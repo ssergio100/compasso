@@ -31,7 +31,7 @@ type Status struct {
 // SynchronizationSource receives session presence for the next heartbeat.
 type SynchronizationSource interface {
 	SetGraphicalSession(active bool, sessionID string, locked bool)
-	RemoteControl() (online, paused, blocked bool)
+	RemoteControl() (online, paused, blocked bool, revision int64)
 }
 
 // Daemon owns the runtime state that is intentionally not persisted between
@@ -98,8 +98,9 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 		return Status{}, err
 	}
 	remoteOnline := false
+	remoteControlRevision := int64(0)
 	if d.synchronizationSource != nil {
-		remoteOnline, snapshot.MonitoringPaused, snapshot.ManualBlock = d.synchronizationSource.RemoteControl()
+		remoteOnline, snapshot.MonitoringPaused, snapshot.ManualBlock, remoteControlRevision = d.synchronizationSource.RemoteControl()
 		if !remoteOnline {
 			snapshot.MonitoringPaused, snapshot.ManualBlock = false, false
 		}
@@ -137,6 +138,28 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	}
 	if d.synchronizationSource != nil {
 		d.synchronizationSource.SetGraphicalSession(activeGraphicalSessionID != "", activeGraphicalSessionID, activeGraphicalSessionLocked)
+	}
+	pendingControl, hasPendingControl, err := d.store.PendingControlEffect(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	controlEffectCurrent := remoteOnline && hasPendingControl && pendingControl.Revision == remoteControlRevision
+	if controlEffectCurrent {
+		effectConfirmed := false
+		switch pendingControl.Kind {
+		case "block_now":
+			effectConfirmed = activeGraphicalSessionID != "" && activeGraphicalSessionLocked
+		case "clear_manual_block", "pause_monitoring":
+			effectConfirmed = activeGraphicalSessionID == "" || !activeGraphicalSessionLocked
+		case "resume_monitoring":
+			effectConfirmed = true
+		}
+		if effectConfirmed {
+			if err := d.store.CompleteControlEffect(ctx, pendingControl.CommandID, now); err != nil {
+				return Status{}, err
+			}
+			controlEffectCurrent = false
+		}
 	}
 	localDate := now.Format(localDateLayout)
 	if d.tracker == nil {
@@ -177,7 +200,7 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 			return Status{}, fmt.Errorf("reconcile server-confirmed usage: %w", err)
 		}
 	}
-	awaitingSynchronization := remoteOnline && activeGraphicalSessionID != "" &&
+	awaitingSynchronization := remoteOnline && !snapshot.MonitoringPaused && !snapshot.ManualBlock && activeGraphicalSessionID != "" &&
 		(!hasConfirmedState || confirmedState.SessionID != activeGraphicalSessionID ||
 			confirmedState.LocalDate != localDate || confirmedState.Revision < snapshot.Revision)
 	var decision policy.Decision
@@ -220,6 +243,18 @@ func (d *Daemon) Step(ctx context.Context, now time.Time) (Status, error) {
 	}
 
 	if decision.Allowed {
+		unlockRequested := controlEffectCurrent &&
+			(pendingControl.Kind == "clear_manual_block" || pendingControl.Kind == "pause_monitoring")
+		if unlockRequested {
+			for _, current := range graphical {
+				if current.State != "active" || !lockedSessions[current.BalanceAuthorizationID()] {
+					continue
+				}
+				if err := d.sessions.Unlock(ctx, current); err != nil {
+					return status, err
+				}
+			}
+		}
 		for key := range d.lockAttempts {
 			delete(d.lockAttempts, key)
 		}

@@ -2,7 +2,7 @@ export type View = "now" | "limits" | "routines" | "administration" | "communica
 export type AvatarKey = "cat" | "dog" | "fox" | "rabbit" | "panda" | "owl" | "penguin" | "capybara" | "cat_bow" | "rabbit_flower" | "panda_flower" | "fox_bow";
 export type RoutineIconKey = "study" | "reading" | "sleep" | "bath" | "meal" | "school" | "exercise" | "chores" | "family" | "music" | "outdoor" | "general";
 export type ActualState = "offline" | "blocked" | "unblocked";
-export type ControlStatus = "offline" | "pause_requested" | "paused" | "block_requested" | "blocked" | "active";
+export type ControlStatus = "offline" | "pause_requested" | "resume_requested" | "paused" | "block_requested" | "unblock_requested" | "blocked" | "active";
 
 export type CommunicationParty = "agent" | "api" | "interface";
 export type CommunicationResult = "success" | "warning" | "error";

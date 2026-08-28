@@ -67,7 +67,7 @@ func TestRunReportsSuccessfulSynchronization(t *testing.T) {
 		if r.Header.Get(protocol.VersionHeader) != protocol.CurrentProtocolVersion {
 			t.Errorf("protocol version header=%q", r.Header.Get(protocol.VersionHeader))
 		}
-		if r.Header.Get(protocol.CapabilitiesHeader) != protocol.NextHeartbeatCapability {
+		if r.Header.Get(protocol.CapabilitiesHeader) != protocol.NextHeartbeatCapability+", "+protocol.CommandAckReceiptCapability {
 			t.Errorf("protocol capabilities header=%q", r.Header.Get(protocol.CapabilitiesHeader))
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -201,9 +201,8 @@ func TestNewRejectsUnsafeHeartbeatFallback(t *testing.T) {
 	}
 }
 
-func TestRunImmediatelyAcknowledgesReceivedCommand(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func TestControlCommandAcknowledgesOnlyAfterGraphicalEffect(t *testing.T) {
+	ctx := context.Background()
 	agentStore, err := agentstorage.Open(ctx, filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -211,15 +210,15 @@ func TestRunImmediatelyAcknowledgesReceivedCommand(t *testing.T) {
 	defer agentStore.Close()
 
 	const commandID = "block-command"
-	var requests uint32
-	acknowledged := make(chan []string, 1)
+	var requests []protocol.HeartbeatRequest
 	httpClient := &http.Client{Transport: handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var heartbeat protocol.HeartbeatRequest
 		if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
 			t.Errorf("decode heartbeat: %v", err)
 		}
+		requests = append(requests, heartbeat)
 		w.Header().Set("Content-Type", "application/json")
-		if atomic.AddUint32(&requests, 1) == 1 {
+		if len(requests) <= 2 {
 			_, _ = w.Write([]byte(`{
 				"server_time":"2026-08-24T12:00:00Z",
 				"commands":[{"id":"block-command","kind":"block_now","created_at":"2026-08-24T12:00:00Z"}],
@@ -227,8 +226,11 @@ func TestRunImmediatelyAcknowledgesReceivedCommand(t *testing.T) {
 			}`))
 			return
 		}
-		acknowledged <- heartbeat.CommandAcks
-		_, _ = w.Write([]byte(`{"server_time":"2026-08-24T12:00:01Z","control":{"revision":2,"manual_block":true}}`))
+		_, _ = w.Write([]byte(`{
+			"server_time":"2026-08-24T12:00:01Z",
+			"acknowledged_commands":["block-command"],
+			"control":{"revision":2,"manual_block":true}
+		}`))
 	})}}
 	client, err := New(agentStore, httpClient, Config{
 		ServerURL: "http://tempo.test", DeviceID: "device", DeviceToken: "token",
@@ -238,19 +240,27 @@ func TestRunImmediatelyAcknowledgesReceivedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	finished := make(chan error, 1)
-	go func() { finished <- client.Run(ctx, log.New(io.Discard, "", 0)) }()
-	select {
-	case commandAcks := <-acknowledged:
-		if len(commandAcks) != 1 || commandAcks[0] != commandID {
-			t.Fatalf("immediate command acknowledgements=%v", commandAcks)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("command acknowledgement waited for the normal heartbeat interval")
-	}
-	cancel()
-	if err := <-finished; err != nil {
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	if _, err := client.Heartbeat(ctx, now); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := client.Heartbeat(ctx, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests[1].CommandAcks) != 0 {
+		t.Fatalf("command acknowledged before graphical effect: %v", requests[1].CommandAcks)
+	}
+	if err := agentStore.CompleteControlEffect(ctx, commandID, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Heartbeat(ctx, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests[2].CommandAcks) != 1 || requests[2].CommandAcks[0] != commandID {
+		t.Fatalf("confirmed command acknowledgements=%v", requests[2].CommandAcks)
+	}
+	if ids, err := agentStore.AppliedCommandIDs(ctx, 10); err != nil || len(ids) != 0 {
+		t.Fatalf("server-confirmed command remained locally=%v err=%v", ids, err)
 	}
 }
 
@@ -866,15 +876,15 @@ func TestHeartbeatFailureDiscardsRemoteControl(t *testing.T) {
 	if _, err := client.Heartbeat(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	if active, paused, blocked := client.RemoteControl(); !active || paused || !blocked {
-		t.Fatalf("online control active=%t paused=%t blocked=%t", active, paused, blocked)
+	if active, paused, blocked, revision := client.RemoteControl(); !active || paused || !blocked || revision != 2 {
+		t.Fatalf("online control active=%t paused=%t blocked=%t revision=%d", active, paused, blocked, revision)
 	}
 	atomic.StoreUint32(&online, 0)
 	if _, err := client.Heartbeat(ctx, now.Add(time.Second)); err == nil {
 		t.Fatal("offline heartbeat succeeded")
 	}
-	if active, paused, blocked := client.RemoteControl(); active || paused || blocked {
-		t.Fatalf("stale control active=%t paused=%t blocked=%t", active, paused, blocked)
+	if active, paused, blocked, revision := client.RemoteControl(); active || paused || blocked || revision != 0 {
+		t.Fatalf("stale control active=%t paused=%t blocked=%t revision=%d", active, paused, blocked, revision)
 	}
 }
 

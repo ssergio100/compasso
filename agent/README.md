@@ -50,8 +50,9 @@ são aplicadas por revisão e comandos são confirmados de forma durável. Se os
 três valores estiverem vazios ou o servidor estiver indisponível, o daemon
 continua aplicando integralmente o estado local.
 
-O heartbeat anuncia `X-Compasso-Protocol-Version: 2` e a capacidade
-`next-heartbeat-seconds`. Quando o servidor devolve `next_heartbeat_seconds`,
+O heartbeat anuncia `X-Compasso-Protocol-Version: 2` e as capacidades
+`next-heartbeat-seconds` e `command-ack-receipts`. Quando o servidor devolve
+`next_heartbeat_seconds`,
 o agente usa esse intervalo no ciclo normal seguinte, limitado entre 1 segundo
 e 10 minutos. Campo ausente ou inválido usa o fallback embutido de 3 segundos;
 o valor não é persistido, e o `heartbeat_interval` local legado não controla o
@@ -60,6 +61,11 @@ de registrar o comando como aplicado. O
 reconhecimento enviado no heartbeat seguinte significa, portanto, que o saldo
 autorizado já está durável; a data usada é a mesma data local enviada no
 heartbeat, inclusive perto da meia-noite.
+
+Comandos de controle são persistidos separadamente e só são reconhecidos
+depois de o daemon observar o efeito em `LockedHint`. O servidor devolve os IDs
+de comando que recebeu para o agente remover esses reconhecimentos locais, sem
+retransmiti-los indefinidamente.
 
 Uma sessão nova solicita ao servidor uma âncora com saldo confirmado. A
 identidade combina o namespace privado do ciclo do serviço e a sessão logind.

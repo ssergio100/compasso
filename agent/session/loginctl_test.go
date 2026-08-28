@@ -101,6 +101,28 @@ func TestLockUsesLogindWithoutEndingSession(t *testing.T) {
 	}
 }
 
+func TestUnlockUsesLogindWithoutEndingSession(t *testing.T) {
+	manager, err := newLogind("/usr/bin/loginctl", "testnamespace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commandPath string
+	var commandArguments []string
+	manager.executeCommand = func(_ context.Context, path string, arguments ...string) ([]byte, error) {
+		commandPath = path
+		commandArguments = append([]string(nil), arguments...)
+		return nil, nil
+	}
+	current := Session{ID: "3", User: "child", Type: "wayland", Class: "user", State: "active"}
+	if err := manager.Unlock(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	if commandPath != "/usr/bin/loginctl" || len(commandArguments) != 2 ||
+		commandArguments[0] != "unlock-session" || commandArguments[1] != "3" {
+		t.Fatalf("command=%q arguments=%q", commandPath, commandArguments)
+	}
+}
+
 func TestIsLockedReadsLogindLockedHint(t *testing.T) {
 	manager, err := newLogind("/usr/bin/loginctl", "testnamespace")
 	if err != nil {
