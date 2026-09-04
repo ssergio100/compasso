@@ -23,6 +23,8 @@ PKEXEC_PATH = "/usr/bin/pkexec"
 BUS_NAME = "br.com.tempo.Agent"
 OBJECT_PATH = "/br/com/tempo/Agent"
 INTERFACE_NAME = "br.com.tempo.Agent"
+APPLICATION_ID = "br.com.compasso.AgentSetup"
+APPLICATION_ICON = "br.com.compasso.Compasso"
 
 
 def synchronization_status_text(state, detail=""):
@@ -149,6 +151,7 @@ def run_privileged_configuration(configuration):
 class AgentSetupWindow(Gtk.ApplicationWindow):
     def __init__(self, application):
         super().__init__(application=application, title="Compasso — Configurar agente")
+        self.set_icon_name(APPLICATION_ICON)
         self.set_default_size(540, 520)
         self.set_resizable(False)
         self.status_proxy = None
@@ -349,7 +352,7 @@ class AgentSetupWindow(Gtk.ApplicationWindow):
 
 class AgentSetupApplication(Gtk.Application):
     def __init__(self, first_run=False):
-        super().__init__(application_id="br.com.compasso.AgentSetup")
+        super().__init__(application_id=APPLICATION_ID)
         self.first_run = first_run
 
     def do_activate(self):

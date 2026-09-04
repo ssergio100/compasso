@@ -20,6 +20,7 @@ secrets/
 *.key
 *.pem
 *credentials*.json
+.compasso-publish-server-host
 
 # Editors and operating systems
 .idea/

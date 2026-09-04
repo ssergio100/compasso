@@ -147,6 +147,10 @@ executa testes, gera e inspeciona o pacote, verifica o host remoto, envia o
 artefato, instala ou atualiza e confirma o healthcheck externo. Pode operar
 somente localmente com `--build-only`.
 
+O último endereço SSH validado é salvo localmente em
+`.compasso-publish-server-host` e aparece como padrão na execução seguinte. O
+arquivo é ignorado pelo Git e não contém senha, usuário ou chave privada.
+
 Esse script produz alterações externas e pede confirmações antes das etapas
 relevantes. `--yes` aceita apenas confirmações classificadas como não críticas.
 

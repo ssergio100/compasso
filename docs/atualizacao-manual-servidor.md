@@ -37,6 +37,9 @@ Para apenas gerar e validar um pacote:
 
 As opções disponíveis podem ser consultadas com
 `./scripts/publish-server.sh --help`. Nenhuma senha é salva pelo script.
+O último endereço SSH validado é mantido no arquivo local ignorado pelo Git
+`.compasso-publish-server-host` e reaparece como valor padrão na próxima
+execução.
 
 ## Fluxo manual de contingência
 
@@ -99,4 +102,3 @@ O endpoint deve responder `{"status":"ok"}`.
 ## Observação
 
 O pacote atualiza a API. A interface administrativa é publicada separadamente.
-

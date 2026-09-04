@@ -160,3 +160,56 @@ func TestTenMinuteWarningDoesNotFireWithThirtyOneMinutesRemaining(t *testing.T) 
 		t.Fatalf("ten-minute alerts=%+v err=%v", alerts, err)
 	}
 }
+
+func TestPlannedAlertsExplainEveryScheduledBlockReason(t *testing.T) {
+	blockAt := time.Date(2026, 8, 28, 22, 0, 0, 0, time.Local)
+	tests := []struct {
+		name   string
+		reason policy.Reason
+		want   map[string][2]string
+	}{
+		{
+			name:   "routine",
+			reason: policy.ReasonRoutine,
+			want: map[string][2]string{
+				AlertPrimary:    {"Rotina programada em 10 minutos", "Uma rotina programada começará em 10 minutos. O computador será bloqueado."},
+				AlertFiveMinute: {"Rotina programada em 5 minutos", "Uma rotina programada começará em 5 minutos. O computador será bloqueado."},
+				AlertOneMinute:  {"Rotina programada em 1 minuto", "Uma rotina programada começará em 1 minuto. O computador será bloqueado."},
+			},
+		},
+		{
+			name:   "quota",
+			reason: policy.ReasonQuota,
+			want: map[string][2]string{
+				AlertPrimary:    {"O tempo de hoje termina em 10 minutos", "O tempo disponível de hoje terminará em 10 minutos. O computador será bloqueado."},
+				AlertFiveMinute: {"O tempo de hoje termina em 5 minutos", "O tempo disponível de hoje terminará em 5 minutos. O computador será bloqueado."},
+				AlertOneMinute:  {"O tempo de hoje termina em 1 minuto", "O tempo disponível de hoje terminará em 1 minuto. O computador será bloqueado."},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			alerts := plannedAlerts(policy.Decision{
+				Allowed: true, NextBlockAt: blockAt, NextBlockReason: test.reason,
+			}, 10)
+			if len(alerts) != len(test.want) {
+				t.Fatalf("alerts=%+v", alerts)
+			}
+			for _, alert := range alerts {
+				want, ok := test.want[alert.Kind]
+				if !ok || alert.Title != want[0] || alert.Body != want[1] {
+					t.Errorf("alert=%+v want=%+v", alert, want)
+				}
+			}
+		})
+	}
+}
+
+func TestManualBlockCopyNeverExposesTechnicalReason(t *testing.T) {
+	if title := titleForReason(policy.ReasonManualBlock, 1); title != "Bloqueio solicitado pelo responsável" {
+		t.Fatalf("title=%q", title)
+	}
+	if body := bodyForReason(policy.ReasonManualBlock, 1); body != "O responsável solicitou o bloqueio deste computador." {
+		t.Fatalf("body=%q", body)
+	}
+}

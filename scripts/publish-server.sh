@@ -3,9 +3,11 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dist_directory="${project_root}/dist"
+server_host_state_file="${project_root}/.compasso-publish-server-host"
 
 requested_version=""
 server_host="${COMPASSO_DEPLOY_HOST:-}"
+saved_server_host=""
 ssh_user="${COMPASSO_DEPLOY_USER:-${USER:-}}"
 ssh_port="${COMPASSO_DEPLOY_PORT:-22}"
 identity_file="${COMPASSO_DEPLOY_IDENTITY:-}"
@@ -14,6 +16,14 @@ run_tests=true
 build_only=false
 assume_yes=false
 deployment_started=false
+
+if [[ -r "${server_host_state_file}" ]]; then
+  IFS= read -r saved_server_host < "${server_host_state_file}" || true
+  if [[ ! "${saved_server_host}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "aviso: endereço salvo inválido foi ignorado: ${server_host_state_file}" >&2
+    saved_server_host=""
+  fi
+fi
 
 show_usage() {
   cat <<'EOF'
@@ -36,6 +46,8 @@ Opções:
 
 Variáveis equivalentes: COMPASSO_DEPLOY_HOST, COMPASSO_DEPLOY_USER,
 COMPASSO_DEPLOY_PORT, COMPASSO_DEPLOY_IDENTITY e COMPASSO_DEPLOY_HEALTH_URL.
+O último endereço de servidor validado fica salvo localmente e será sugerido
+na execução seguinte.
 EOF
 }
 
@@ -154,14 +166,15 @@ container_version="${package_version//\~/-}"
 
 if [[ "${build_only}" == false ]]; then
   if [[ "${assume_yes}" == true ]]; then
-    [[ -n "${server_host}" ]] || fail "informe --host ao usar --yes"
+    server_host="${server_host:-${saved_server_host}}"
+    [[ -n "${server_host}" ]] || fail "informe --host na primeira execução com --yes"
     [[ -n "${ssh_user}" ]] || fail "informe --user ao usar --yes"
     if [[ -z "${health_url}" ]]; then
       health_url="http://${server_host}:8181/healthz"
     fi
   else
     if [[ -z "${server_host}" ]]; then
-      server_host="$(prompt_value "Endereço ou nome do servidor" "")"
+      server_host="$(prompt_value "Endereço ou nome do servidor" "${saved_server_host}")"
     fi
     ssh_user="$(prompt_value "Usuário SSH" "${ssh_user}")"
     ssh_port="$(prompt_value "Porta SSH" "${ssh_port}")"
@@ -179,6 +192,10 @@ if [[ "${build_only}" == false ]]; then
   if [[ -n "${identity_file}" && ! -r "${identity_file}" ]]; then
     fail "chave SSH não encontrada ou sem leitura: ${identity_file}"
   fi
+  (
+    umask 077
+    printf '%s\n' "${server_host}" > "${server_host_state_file}"
+  ) || fail "não foi possível salvar o último endereço do servidor"
 fi
 
 if command -v git >/dev/null 2>&1 && git -C "${project_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

@@ -115,6 +115,7 @@ required_package_paths=(
   usr/bin/compasso-agent-setup
   usr/share/applications/br.com.compasso.Compasso.desktop
   etc/xdg/autostart/br.com.compasso.AgentSetup.desktop
+  usr/share/icons/hicolor/256x256/apps/br.com.compasso.Compasso.png
   usr/share/dbus-1/system.d/br.com.tempo.Agent.conf
   usr/share/polkit-1/actions/br.com.compasso.AgentSetup.policy
   usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml
@@ -125,6 +126,30 @@ for required_package_path in "${required_package_paths[@]}"; do
     exit 1
   fi
 done
+
+main_desktop_file="${temporary_directory}/root/usr/share/applications/br.com.compasso.Compasso.desktop"
+setup_desktop_file="${temporary_directory}/root/etc/xdg/autostart/br.com.compasso.AgentSetup.desktop"
+if ! grep -Fxq 'Icon=br.com.compasso.Compasso' "${main_desktop_file}" || \
+   ! grep -Fxq 'Icon=br.com.compasso.Compasso' "${setup_desktop_file}"; then
+  echo "erro: as duas janelas não usam o ícone da raposa" >&2
+  exit 1
+fi
+if ! grep -Fxq 'NoDisplay=true' "${setup_desktop_file}"; then
+  echo "erro: a configuração avançada está visível no menu de aplicativos" >&2
+  exit 1
+fi
+if ! grep -Fq 'APPLICATION_ID = "br.com.compasso.Compasso"' \
+  "${temporary_directory}/root/usr/bin/tempo-local-bonus" || \
+   ! grep -Fq 'APPLICATION_ID = "br.com.compasso.AgentSetup"' \
+  "${temporary_directory}/root/usr/bin/compasso-agent-setup"; then
+  echo "erro: os identificadores GTK não correspondem aos arquivos desktop" >&2
+  exit 1
+fi
+if ! file "${temporary_directory}/root/usr/share/icons/hicolor/256x256/apps/br.com.compasso.Compasso.png" | \
+  grep -Fq 'PNG image data, 256 x 256, 8-bit/color RGBA'; then
+  echo "erro: o ícone da aplicação não é um PNG RGBA 256x256" >&2
+  exit 1
+fi
 
 if ! grep -Fq 'GetSynchronizationReport' "${temporary_directory}/root/usr/bin/tempo-local-bonus"; then
   echo "erro: interface local não consulta o diagnóstico de sincronização" >&2

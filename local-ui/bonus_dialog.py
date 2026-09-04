@@ -16,6 +16,8 @@ INTERFACE_NAME = "br.com.tempo.Agent"
 BONUS_OPTIONS = (15, 30, 60, 120)
 SETUP_APPLICATION_PATH = "/usr/bin/compasso-agent-setup"
 SETUP_MARKER_PATH = "/etc/tempo-agent/setup-complete"
+APPLICATION_ID = "br.com.compasso.Compasso"
+APPLICATION_ICON = "br.com.compasso.Compasso"
 
 
 def seconds_for_index(index):
@@ -103,6 +105,7 @@ def friendly_error_name(remote_name):
 class BonusWindow(Gtk.ApplicationWindow):
     def __init__(self, application):
         super().__init__(application=application, title="Compasso — Adicionar tempo")
+        self.set_icon_name(APPLICATION_ICON)
         self.set_default_size(420, 320)
         self.set_resizable(False)
         self.proxy = None
@@ -265,7 +268,7 @@ class BonusWindow(Gtk.ApplicationWindow):
 
 class BonusApplication(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id="br.com.tempo.LocalBonus")
+        super().__init__(application_id=APPLICATION_ID)
 
     def do_activate(self):
         window = self.props.active_window

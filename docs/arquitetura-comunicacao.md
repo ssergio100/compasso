@@ -299,7 +299,7 @@ Esses campos pertencem à administração e não fazem parte do heartbeat do age
 | Login inicial | texto não vazio, até 80 caracteres |
 | Senha administrativa inicial | não vazia, confirmação igual, até 4096 caracteres |
 | Nome do dispositivo | texto não vazio depois de remover espaços externos, até 80 caracteres |
-| Avatar do dispositivo | `cat`, `dog`, `fox`, `rabbit`, `panda`, `owl`, `penguin`, `capybara`, `cat_bow`, `rabbit_flower`, `panda_flower` ou `fox_bow` |
+| Avatar do dispositivo | coleção vigente: `capybara`, `cat`, `chick`, `dog`, `fox`, `lion`, `owl`, `panda`, `penguin`, `rabbit`, `sheep` ou `tiger`; chaves antigas continuam aceitas para compatibilidade |
 | Cota de cada dia | 0 a 86.400 segundos |
 | Aviso | 0 a 120 minutos no servidor; o ADM oferece valores predefinidos |
 | Nome da rotina | texto não vazio, até 80 caracteres |

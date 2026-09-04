@@ -17,6 +17,7 @@ required_sources=(
   "${project_root}/local-ui/configure_agent.py"
   "${project_root}/packaging/applications/br.com.compasso.Compasso.desktop"
   "${project_root}/packaging/autostart/br.com.compasso.AgentSetup.desktop"
+  "${project_root}/packaging/icons/br.com.compasso.Compasso.png"
   "${project_root}/packaging/config/tempo-agent.toml"
   "${project_root}/packaging/dbus/br.com.tempo.Agent.conf"
   "${project_root}/packaging/metainfo/br.com.compasso.Compasso.metainfo.xml"
@@ -66,6 +67,7 @@ install -d \
   "${package_root}/usr/share/applications" \
   "${package_root}/usr/share/dbus-1/system.d" \
   "${package_root}/usr/share/doc/compasso-client" \
+  "${package_root}/usr/share/icons/hicolor/256x256/apps" \
   "${package_root}/usr/share/metainfo"
 install -d "${package_root}/usr/share/polkit-1/actions"
 
@@ -90,6 +92,9 @@ install -m 0644 \
 install -m 0644 \
   "${project_root}/packaging/autostart/br.com.compasso.AgentSetup.desktop" \
   "${package_root}/etc/xdg/autostart/br.com.compasso.AgentSetup.desktop"
+install -m 0644 \
+  "${project_root}/packaging/icons/br.com.compasso.Compasso.png" \
+  "${package_root}/usr/share/icons/hicolor/256x256/apps/br.com.compasso.Compasso.png"
 install -m 0644 \
   "${project_root}/packaging/dbus/br.com.tempo.Agent.conf" \
   "${package_root}/usr/share/dbus-1/system.d/br.com.tempo.Agent.conf"

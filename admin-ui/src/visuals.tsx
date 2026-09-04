@@ -2,16 +2,16 @@ import type { AvatarKey, RoutineIconKey } from "./types";
 
 import capybara from "./assets/illustrations/avatars/capybara.webp";
 import cat from "./assets/illustrations/avatars/cat.webp";
-import catBow from "./assets/illustrations/avatars/cat-bow.webp";
+import chick from "./assets/illustrations/avatars/chick.webp";
 import dog from "./assets/illustrations/avatars/dog.webp";
 import fox from "./assets/illustrations/avatars/fox.webp";
-import foxBow from "./assets/illustrations/avatars/fox-bow.webp";
+import lion from "./assets/illustrations/avatars/lion.webp";
 import owl from "./assets/illustrations/avatars/owl.webp";
 import panda from "./assets/illustrations/avatars/panda.webp";
-import pandaFlower from "./assets/illustrations/avatars/panda-flower.webp";
 import penguin from "./assets/illustrations/avatars/penguin.webp";
 import rabbit from "./assets/illustrations/avatars/rabbit.webp";
-import rabbitFlower from "./assets/illustrations/avatars/rabbit-flower.webp";
+import sheep from "./assets/illustrations/avatars/sheep.webp";
+import tiger from "./assets/illustrations/avatars/tiger.webp";
 import bath from "./assets/illustrations/routines/bath.webp";
 import chores from "./assets/illustrations/routines/chores.webp";
 import exercise from "./assets/illustrations/routines/exercise.webp";
@@ -26,12 +26,13 @@ import sleep from "./assets/illustrations/routines/sleep.webp";
 import study from "./assets/illustrations/routines/study.webp";
 
 export const avatars: { key: AvatarKey; label: string; src: string }[] = [
-  { key: "cat", label: "Gato", src: cat }, { key: "dog", label: "Cachorro", src: dog },
-  { key: "fox", label: "Raposa", src: fox }, { key: "rabbit", label: "Leão", src: rabbit },
-  { key: "panda", label: "Coala", src: panda }, { key: "owl", label: "Coruja", src: owl },
-  { key: "penguin", label: "Pinguim", src: penguin }, { key: "capybara", label: "Capivara", src: capybara },
-  { key: "cat_bow", label: "Gatinha", src: catBow }, { key: "rabbit_flower", label: "Coelhinha", src: rabbitFlower },
-  { key: "panda_flower", label: "Panda floral", src: pandaFlower }, { key: "fox_bow", label: "Raposinha", src: foxBow },
+  { key: "capybara", label: "Capivara", src: capybara }, { key: "cat", label: "Gato", src: cat },
+  { key: "chick", label: "Pintinho", src: chick }, { key: "dog", label: "Cachorro", src: dog },
+  { key: "fox", label: "Raposa", src: fox },
+  { key: "lion", label: "Leão", src: lion }, { key: "owl", label: "Coruja", src: owl },
+  { key: "panda", label: "Panda", src: panda }, { key: "penguin", label: "Pinguim", src: penguin },
+  { key: "rabbit", label: "Coelho", src: rabbit }, { key: "sheep", label: "Ovelha", src: sheep },
+  { key: "tiger", label: "Tigre", src: tiger },
 ];
 
 export const routineIcons: { key: RoutineIconKey; label: string; src: string }[] = [
@@ -44,6 +45,9 @@ export const routineIcons: { key: RoutineIconKey; label: string; src: string }[]
 ];
 
 const avatarByKey = new Map(avatars.map((item) => [item.key, item]));
+const legacyAvatarAliases: Record<string, AvatarKey> = {
+  cat_bow: "cat", rabbit_flower: "rabbit", panda_flower: "panda", fox_bow: "fox",
+};
 const routineByKey = new Map(routineIcons.map((item) => [item.key, item]));
 
 export function isAvatarKey(value: unknown): value is AvatarKey { return typeof value === "string" && avatarByKey.has(value as AvatarKey); }
@@ -53,6 +57,12 @@ export function defaultAvatarKey(id: string): AvatarKey {
   let hash = 0;
   for (const character of id) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   return avatars[hash % avatars.length].key;
+}
+
+export function normalizeAvatarKey(value: unknown, deviceID: string): AvatarKey {
+  if (isAvatarKey(value)) return value;
+  if (typeof value === "string" && legacyAvatarAliases[value]) return legacyAvatarAliases[value];
+  return defaultAvatarKey(deviceID);
 }
 
 export function inferRoutineIcon(name: string): RoutineIconKey {

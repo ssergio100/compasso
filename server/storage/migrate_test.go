@@ -53,6 +53,99 @@ func TestMigrationElevenAddsAndBackfillsVisualIdentities(t *testing.T) {
 	}
 }
 
+func TestMigrationThirteenPreservesExistingAvatarAndAcceptsSecondCollection(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "server.db")
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)
+	existing, err := store.CreateDeviceWithAvatar(ctx, "Avatar antigo", "cat_bow", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		DELETE FROM schema_migrations WHERE version=13;
+		PRAGMA user_version=12;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	preserved, _, err := reopened.LoadDevice(ctx, existing.ID)
+	if err != nil || preserved.AvatarKey != "cat_bow" {
+		t.Fatalf("preserved avatar=%q err=%v", preserved.AvatarKey, err)
+	}
+	for index, avatarKey := range []string{"lion", "sheep", "tiger"} {
+		device, createErr := reopened.CreateDeviceWithAvatar(
+			ctx, "Avatar novo "+avatarKey, avatarKey, now.Add(time.Duration(index+1)*time.Second),
+		)
+		if createErr != nil || device.AvatarKey != avatarKey {
+			t.Fatalf("create avatar %q: device=%+v err=%v", avatarKey, device, createErr)
+		}
+	}
+}
+
+func TestMigrationFourteenAddsChickToAnExistingCollection(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "server.db")
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE device (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			avatar_key TEXT NOT NULL DEFAULT 'cat' CHECK (avatar_key IN (
+				'cat', 'dog', 'fox', 'rabbit', 'panda', 'owl', 'penguin', 'capybara',
+				'lion', 'sheep', 'tiger',
+				'cat_bow', 'rabbit_flower', 'panda_flower', 'fox_bow'
+			))
+		);
+		INSERT INTO schema_migrations(version)
+		VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13);
+		INSERT INTO device(id, name, avatar_key)
+		VALUES ('existing-device', 'Avatar existente', 'cat_bow');
+		PRAGMA user_version=13;
+	`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var preserved string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT avatar_key FROM device WHERE id='existing-device'`,
+	).Scan(&preserved); err != nil || preserved != "cat_bow" {
+		t.Fatalf("preserved avatar=%q err=%v", preserved, err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO device(id, name, avatar_key) VALUES ('chick-device', 'Pintinho', 'chick')`,
+	); err != nil {
+		t.Fatalf("migration 14 did not accept chick: %v", err)
+	}
+}
+
 func TestMigrationTwelveCompactsControlQueueAndNormalizesState(t *testing.T) {
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "server.db")

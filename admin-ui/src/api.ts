@@ -1,5 +1,5 @@
 import type { AvatarKey, CommunicationResponse, Device, DeviceActivitiesResponse, DeviceDetailResponse, DeviceResponse, Routine, Session } from "./types";
-import { defaultAvatarKey, inferRoutineIcon, isAvatarKey, isRoutineIconKey } from "./visuals";
+import { inferRoutineIcon, isRoutineIconKey, normalizeAvatarKey } from "./visuals";
 
 const productionAPIBase = import.meta.env.PROD
   ? `${window.location.protocol}//${window.location.hostname}:8181`
@@ -64,7 +64,7 @@ class API {
   private async device(id: string): Promise<Device> {
     const detail = await this.request<DeviceDetailResponse>(`/api/v1/admin/devices/${id}`);
     return {
-      id: detail.device.id, name: detail.device.name, avatar_key: isAvatarKey(detail.device.avatar_key) ? detail.device.avatar_key : defaultAvatarKey(detail.device.id),
+      id: detail.device.id, name: detail.device.name, avatar_key: normalizeAvatarKey(detail.device.avatar_key, detail.device.id),
       online: detail.status.online,
       graphical_session_active: detail.status.graphical_session_active,
       monitoring_paused: detail.control.monitoring_paused, manual_block: detail.control.manual_block,

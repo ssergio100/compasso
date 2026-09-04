@@ -2,6 +2,8 @@ import unittest
 from unittest import mock
 
 from bonus_dialog import (
+    APPLICATION_ICON,
+    APPLICATION_ID,
     BONUS_OPTIONS,
     SETUP_APPLICATION_PATH,
     open_settings,
@@ -13,6 +15,10 @@ from bonus_dialog import (
 
 
 class BonusDialogLogicTest(unittest.TestCase):
+    def test_application_identity_matches_the_published_desktop_file(self):
+        self.assertEqual(APPLICATION_ID, "br.com.compasso.Compasso")
+        self.assertEqual(APPLICATION_ICON, "br.com.compasso.Compasso")
+
     def test_all_options_convert_to_exact_seconds(self):
         self.assertEqual(
             [seconds_for_index(index) for index in range(len(BONUS_OPTIONS))],

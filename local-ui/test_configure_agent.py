@@ -2,6 +2,8 @@ import unittest
 from unittest import mock
 
 from configure_agent import (
+    APPLICATION_ICON,
+    APPLICATION_ID,
     DEFAULT_SERVER_URL,
     available_controlled_users,
     controlled_user_confirmation_text,
@@ -13,6 +15,10 @@ from configure_agent import (
 
 
 class AgentSetupLogicTest(unittest.TestCase):
+    def test_hidden_setup_identity_and_shared_icon_are_stable(self):
+        self.assertEqual(APPLICATION_ID, "br.com.compasso.AgentSetup")
+        self.assertEqual(APPLICATION_ICON, "br.com.compasso.Compasso")
+
     def test_synchronization_status_text_is_never_static(self):
         self.assertIn("conectado", synchronization_status_text("online"))
         self.assertIn("sem comunicação", synchronization_status_text("offline"))

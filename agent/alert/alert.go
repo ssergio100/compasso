@@ -133,37 +133,47 @@ func plannedAlerts(decision policy.Decision, warningMinutes int) []Alert {
 	plannedAlerts := make([]Alert, 0, len(alertTimes))
 	for _, alertTime := range alertTimes {
 		alertKind := thresholds[alertTime]
+		remainingMinutes := int(decision.NextBlockAt.Sub(alertTime).Minutes())
 		plannedAlerts = append(plannedAlerts, Alert{
 			At: alertTime, Kind: alertKind, Reason: decision.NextBlockReason,
-			Title: titleForKind(alertKind, decision.NextBlockReason),
-			Body:  bodyForKind(alertKind, alertTime, decision.NextBlockAt, decision.NextBlockReason),
+			Title: titleForReason(decision.NextBlockReason, remainingMinutes),
+			Body:  bodyForReason(decision.NextBlockReason, remainingMinutes),
 		})
 	}
 	return plannedAlerts
 }
 
-func titleForKind(kind string, reason policy.Reason) string {
-	switch kind {
-	case AlertPrimary:
-		return "Aviso de bloqueio previsto"
-	case AlertFiveMinute:
-		return "Bloqueio em 5 minutos"
-	case AlertOneMinute:
-		return "Bloqueio em 1 minuto"
+func titleForReason(reason policy.Reason, remainingMinutes int) string {
+	remainingText := remainingTimeText(remainingMinutes)
+	switch reason {
+	case policy.ReasonRoutine:
+		return fmt.Sprintf("Rotina programada em %s", remainingText)
+	case policy.ReasonQuota:
+		return fmt.Sprintf("O tempo de hoje termina em %s", remainingText)
+	case policy.ReasonManualBlock:
+		return "Bloqueio solicitado pelo responsável"
 	default:
-		return "Aviso de bloqueio"
+		return fmt.Sprintf("Bloqueio programado em %s", remainingText)
 	}
 }
 
-func bodyForKind(kind string, at, blockAt time.Time, reason policy.Reason) string {
-	remaining := int(blockAt.Sub(at).Minutes())
-	reasonText := ""
-	if reason == policy.ReasonRoutine {
-		reasonText = "rotina programada"
-	} else if reason == policy.ReasonQuota {
-		reasonText = "fim de cota"
-	} else {
-		reasonText = string(reason)
+func bodyForReason(reason policy.Reason, remainingMinutes int) string {
+	remainingText := remainingTimeText(remainingMinutes)
+	switch reason {
+	case policy.ReasonRoutine:
+		return fmt.Sprintf("Uma rotina programada começará em %s. O computador será bloqueado.", remainingText)
+	case policy.ReasonQuota:
+		return fmt.Sprintf("O tempo disponível de hoje terminará em %s. O computador será bloqueado.", remainingText)
+	case policy.ReasonManualBlock:
+		return "O responsável solicitou o bloqueio deste computador."
+	default:
+		return fmt.Sprintf("Este computador será bloqueado em %s.", remainingText)
 	}
-	return fmt.Sprintf("O bloqueio por %s ocorrerá em %d minuto(s).", reasonText, remaining)
+}
+
+func remainingTimeText(minutes int) string {
+	if minutes == 1 {
+		return "1 minuto"
+	}
+	return fmt.Sprintf("%d minutos", minutes)
 }

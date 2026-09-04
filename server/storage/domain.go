@@ -103,7 +103,7 @@ const (
 var validAvatarKeys = map[string]bool{
 	"cat": true, "dog": true, "fox": true, "rabbit": true, "panda": true, "owl": true,
 	"penguin": true, "capybara": true, "cat_bow": true, "rabbit_flower": true,
-	"panda_flower": true, "fox_bow": true,
+	"panda_flower": true, "fox_bow": true, "chick": true, "lion": true, "sheep": true, "tiger": true,
 }
 
 var validRoutineIconKeys = map[string]bool{
