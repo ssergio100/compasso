@@ -1,4 +1,5 @@
 import { ChevronDown, LogOut, Plus, UserRoundCheck } from "lucide-react";
+import { useRef } from "react";
 import { Brand } from "../../components";
 import type { Device } from "../../types";
 import { DeviceAvatar } from "../../visuals";
@@ -16,5 +17,11 @@ export function DeviceRail({ devices, selected, onSelect, onAdd, onLogout }: Nav
 }
 
 export function MobileDeviceHeader({ devices, selected, onSelect, onLogout }: NavigationProps) {
-  return <header className="mobile-header"><div className="mobile-account"><Brand /><button onClick={onLogout}><LogOut size={17} />Sair</button></div><details><summary><DeviceAvatar avatarKey={avatarKeyFor(selected)} name={selected.name} /><span><strong>{selected.name}</strong><DeviceState device={selected} /></span><ChevronDown size={19} /></summary><div>{devices.map((device) => <button key={device.id} onClick={() => onSelect(device.id)}><DeviceAvatar avatarKey={avatarKeyFor(device)} name={device.name} /><span>{device.name}<DeviceState device={device} /></span></button>)}</div></details></header>;
+  const devicePicker = useRef<HTMLDetailsElement>(null);
+  const selectDevice = (deviceId: string) => {
+    onSelect(deviceId);
+    devicePicker.current?.removeAttribute("open");
+  };
+
+  return <header className="mobile-header"><div className="mobile-account"><Brand /><button onClick={onLogout}><LogOut size={17} />Sair</button></div><details ref={devicePicker}><summary><DeviceAvatar avatarKey={avatarKeyFor(selected)} name={selected.name} /><span><strong>{selected.name}</strong><DeviceState device={selected} /></span><ChevronDown size={19} /></summary><div>{devices.map((device) => <button key={device.id} onClick={() => selectDevice(device.id)}><DeviceAvatar avatarKey={avatarKeyFor(device)} name={device.name} /><span>{device.name}<DeviceState device={device} /></span></button>)}</div></details></header>;
 }
