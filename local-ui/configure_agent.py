@@ -16,7 +16,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk
 
 
-DEFAULT_SERVER_URL = "https://apicompasso.smresume.com"
+DEFAULT_SERVER_URL = ""
 SETUP_MARKER_PATH = "/etc/tempo-agent/setup-complete"
 PRIVILEGED_HELPER_PATH = "/usr/sbin/tempo-agent-configure"
 PKEXEC_PATH = "/usr/bin/pkexec"
@@ -110,7 +110,7 @@ def controlled_user_confirmation_text(controlled_user):
         return "Escolha uma conta antes de confirmar."
     return (
         f'Confirmo que a conta “{controlled_user}” será controlada '
-        "e poderá receber logout."
+        "e poderá ter a sessão bloqueada."
     )
 
 

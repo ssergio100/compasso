@@ -119,6 +119,11 @@ required_package_paths=(
   usr/share/dbus-1/system.d/br.com.tempo.Agent.conf
   usr/share/polkit-1/actions/br.com.compasso.AgentSetup.policy
   usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml
+  usr/share/doc/compasso-client/LICENSE
+  usr/share/doc/compasso-client/THIRD_PARTY_NOTICES.md
+  usr/share/doc/compasso-client/copyright
+  usr/share/doc/compasso-client/third-party/godbus-dbus-BSD-3-Clause.txt
+  usr/share/doc/compasso-client/third-party/go-sqlite3-MIT.txt
 )
 for required_package_path in "${required_package_paths[@]}"; do
   if [[ ! -f "${temporary_directory}/root/${required_package_path}" ]]; then
@@ -126,6 +131,17 @@ for required_package_path in "${required_package_paths[@]}"; do
     exit 1
   fi
 done
+
+if ! grep -Fq 'GNU AFFERO GENERAL PUBLIC LICENSE' \
+  "${temporary_directory}/root/usr/share/doc/compasso-client/LICENSE"; then
+  echo "erro: pacote não contém o texto da AGPL" >&2
+  exit 1
+fi
+if ! grep -Fxq '  <project_license>AGPL-3.0-or-later</project_license>' \
+  "${temporary_directory}/root/usr/share/metainfo/br.com.compasso.Compasso.metainfo.xml"; then
+  echo "erro: metadado AppStream não declara a AGPL" >&2
+  exit 1
+fi
 
 main_desktop_file="${temporary_directory}/root/usr/share/applications/br.com.compasso.Compasso.desktop"
 setup_desktop_file="${temporary_directory}/root/etc/xdg/autostart/br.com.compasso.AgentSetup.desktop"

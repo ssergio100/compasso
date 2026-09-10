@@ -5,7 +5,7 @@ avalia a última política local, contabiliza sessões gráficas e usa
 `loginctl lock-session` quando uma regra bloquear o uso, preservando os
 aplicativos abertos.
 
-## Comportamento da fase 3
+## Comportamento atual
 
 - somente sessões gráficas locais `x11` ou `wayland` da conta configurada são
   contabilizadas;
@@ -13,13 +13,14 @@ aplicativos abertos.
 - TTY, SSH, sessões remotas, greeter e contas diferentes não contam;
 - a ausência de rede não interfere no ciclo local;
 - consumo é salvo a cada cinco segundos por padrão e no desligamento normal;
-- uma sessão já em uso é encerrada quando a política muda de liberada para
+- uma sessão já em uso é bloqueada quando a política muda de liberada para
   bloqueada;
-- uma sessão que surge durante um bloqueio não é encerrada durante `opening`;
-  depois de chegar a `active`, o agente aguarda dez segundos de estabilização.
+- uma sessão que surge durante um bloqueio não recebe a ação durante `opening`;
+  depois de chegar a `active`, o agente aguarda dez segundos de estabilização;
 - quando a sincronização está configurada, uma sessão nova sem saldo também
   aguarda o primeiro heartbeat concluído depois do login. Uma resposta com
-  tempo libera a sessão; uma resposta que mantenha o bloqueio permite o logout.
+  tempo libera a sessão; uma resposta que mantenha a restrição permite o
+  bloqueio de tela.
   Falha de rede não conta como resposta e mantém a sessão aberta enquanto o
   agente tenta novamente.
 
@@ -38,11 +39,10 @@ go run ./agent/cmd/tempo-agent -config ./agent/config.toml
 ```
 
 O pacote `policy` contém o motor puro, `storage` mantém SQLite e checkpoints,
-`session` usa logind para descoberta, e `sessionlogout` seleciona adaptadores
-pelas capacidades do D-Bus da sessão; `daemon` coordena o ciclo. A unidade de produção
-está em `packaging/systemd/tempo-agent.service`.
+`session` usa logind para descoberta e bloqueio, e `daemon` coordena o ciclo. A
+unidade de produção está em `packaging/systemd/tempo-agent.service`.
 
-## Sincronização da fase 8
+## Sincronização
 
 Quando `server_url`, `device_id` e `device_token` estão configurados, o pacote
 `syncclient` envia heartbeat, consumo e eventos pendentes. Políticas completas
@@ -72,7 +72,8 @@ identidade combina o namespace privado do ciclo do serviço e a sessão logind.
 Depois da resposta, o daemon
 subtrai somente o uso monotônico posterior; heartbeats sem mudança não reaplicam
 saldo. O heartbeat também informa presença gráfica separadamente do estado
-online, permitindo que o painel pare o contador depois do logout.
+online, permitindo que o painel pare o contador quando a sessão gráfica termina.
 
-Para o ensaio sem instalação, siga `docs/phase-8.md`. Mantenha a vigilância
-pausada para não encerrar a própria sessão de desenvolvimento.
+O contrato e seus estados estão documentados em `docs/synchronization.md` e
+`docs/arquitetura-comunicacao.md`. Mantenha a vigilância pausada em qualquer
+ensaio integrado para não bloquear a própria sessão de desenvolvimento.

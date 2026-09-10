@@ -31,8 +31,8 @@ class AgentSetupLogicTest(unittest.TestCase):
         )
         self.assertIn("erro 400", message)
 
-    def test_default_server_uses_https(self):
-        self.assertEqual(DEFAULT_SERVER_URL, "https://apicompasso.smresume.com")
+    def test_default_server_does_not_assume_a_deployment(self):
+        self.assertEqual(DEFAULT_SERVER_URL, "")
 
     def test_complete_https_form_is_valid(self):
         self.assertIsNone(

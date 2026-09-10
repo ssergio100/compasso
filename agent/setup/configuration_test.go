@@ -23,13 +23,13 @@ func baseConfiguration() config.Config {
 
 func TestRequestApplyProducesCompleteHTTPSConfiguration(t *testing.T) {
 	settings, err := (Request{
-		ControlledUser: " child ", ServerURL: " https://apicompasso.smresume.com/ ",
+		ControlledUser: " child ", ServerURL: " https://api.example.test/ ",
 		DeviceID: " device-1 ", DeviceToken: "secret-token",
 	}).Apply(baseConfiguration())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.ControlledUser != "child" || settings.ServerURL != "https://apicompasso.smresume.com" ||
+	if settings.ControlledUser != "child" || settings.ServerURL != "https://api.example.test" ||
 		settings.DeviceID != "device-1" || settings.DeviceToken != "secret-token" {
 		t.Fatalf("unexpected settings: %+v", settings)
 	}
@@ -40,7 +40,7 @@ func TestRequestApplyProducesCompleteHTTPSConfiguration(t *testing.T) {
 
 func TestRequestApplyRejectsRemotePlainHTTP(t *testing.T) {
 	_, err := (Request{
-		ControlledUser: "child", ServerURL: "http://192.168.18.10:8181",
+		ControlledUser: "child", ServerURL: "http://192.0.2.10:8181",
 		DeviceID: "device-1", DeviceToken: "secret-token",
 	}).Apply(baseConfiguration())
 	if err == nil || !strings.Contains(err.Error(), "HTTPS") {

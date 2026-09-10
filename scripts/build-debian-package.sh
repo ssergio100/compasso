@@ -24,6 +24,9 @@ required_sources=(
   "${project_root}/packaging/polkit/br.com.compasso.AgentSetup.policy"
   "${project_root}/packaging/systemd/tempo-agent.service"
   "${project_root}/docs/client-installation.md"
+  "${project_root}/LICENSE"
+  "${project_root}/THIRD_PARTY_NOTICES.md"
+  "${project_root}/packaging/copyright"
 )
 for required_source in "${required_sources[@]}"; do
   if [[ ! -f "${required_source}" ]]; then
@@ -67,6 +70,7 @@ install -d \
   "${package_root}/usr/share/applications" \
   "${package_root}/usr/share/dbus-1/system.d" \
   "${package_root}/usr/share/doc/compasso-client" \
+  "${package_root}/usr/share/doc/compasso-client/third-party" \
   "${package_root}/usr/share/icons/hicolor/256x256/apps" \
   "${package_root}/usr/share/metainfo"
 install -d "${package_root}/usr/share/polkit-1/actions"
@@ -110,6 +114,17 @@ install -m 0644 \
 install -m 0644 \
   "${project_root}/docs/client-installation.md" \
   "${package_root}/usr/share/doc/compasso-client/README.md"
+install -m 0644 \
+  "${project_root}/LICENSE" \
+  "${package_root}/usr/share/doc/compasso-client/LICENSE"
+install -m 0644 \
+  "${project_root}/THIRD_PARTY_NOTICES.md" \
+  "${package_root}/usr/share/doc/compasso-client/THIRD_PARTY_NOTICES.md"
+install -m 0644 \
+  "${project_root}/packaging/copyright" \
+  "${package_root}/usr/share/doc/compasso-client/copyright"
+install -m 0644 "${project_root}"/licenses/third-party/* \
+  "${package_root}/usr/share/doc/compasso-client/third-party/"
 
 install -d "${project_root}/dist"
 package_path="${project_root}/dist/${package_name}_${package_version}_${package_architecture}.deb"

@@ -5,11 +5,17 @@ Esta é a única interface administrativa vigente do Compasso. O conceito visual
 técnico.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-Sem configuração, usa dados locais demonstrativos. Para consumir a API real, defina `VITE_COMPASSO_REMOTE=true` e `VITE_COMPASSO_API_BASE_URL`, ou use `COMPASSO_DEV_API_TARGET` como proxy de desenvolvimento.
+Para usar os dados locais demonstrativos, abra
+`http://127.0.0.1:4175/?preview=visuals`. Sem esse parâmetro, o
+`runtime-config.js` padrão procura uma API real no mesmo host, porta `8181`.
+
+Para consumir outra API em desenvolvimento, defina
+`VITE_COMPASSO_REMOTE=true` e use `COMPASSO_DEV_API_TARGET` como proxy. Uma URL
+absoluta também pode ser informada por `VITE_COMPASSO_API_BASE_URL`.
 
 O arquivo `public/runtime-config.js` é copiado para o build e, por padrão,
 direciona a interface para a API no mesmo IP, porta `8181`. O bundle repete essa
@@ -22,11 +28,11 @@ contador localmente. O saldo é recarregado somente quando o agente reconhece o
 identificador da operação retornado pela API.
 
 A página **Comunicação** acompanha os intercâmbios entre agente, API e
-interface. Ela consulta somente registros novos a cada segundo, permite busca,
-filtros e inspeção de metadados sanitizados. A retenção é configurável entre 1
-e 90 dias na própria página; o servidor usa 30 dias por padrão e aceita até 365
-dias pela API. A exclusão manual afeta somente os logs do computador
-selecionado, sem remover histórico de uso, bônus ou configurações.
+interface. Ela recebe atualizações pelo stream SSE, permite busca, filtros e
+inspeção de metadados sanitizados. A retenção é configurável entre 1 e 90 dias
+na própria página; o servidor usa 30 dias por padrão e aceita até 365 dias pela
+API. A exclusão manual afeta somente os logs do computador selecionado, sem
+remover histórico de uso, bônus ou configurações.
 
 ```bash
 npm run typecheck

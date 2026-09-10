@@ -15,12 +15,29 @@ __pycache__/
 .env
 .env.*
 !.env.server.example
+!**/.env.example
+!**/.env.*.example
 **/config.toml
 secrets/
 *.key
 *.pem
 *credentials*.json
 .compasso-publish-server-host
+
+# Local project material that is intentionally not published
+/.private/
+
+# Tool caches, reports and temporary backups
+.cache/
+.pytest_cache/
+.ruff_cache/
+coverage/
+*.coverage
+*.prof
+*.bak
+*.orig
+*.rej
+npm-debug.log*
 
 # Editors and operating systems
 .idea/

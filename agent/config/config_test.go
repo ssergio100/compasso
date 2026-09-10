@@ -65,12 +65,12 @@ func TestValidateRequiresHTTPSForRemoteSynchronization(t *testing.T) {
 		TickInterval: time.Second, CheckpointInterval: 5 * time.Second,
 		LoginctlPath: "/usr/bin/loginctl", HeartbeatInterval: 10 * time.Second,
 		HTTPTimeout: 8 * time.Second, DeviceID: "device", DeviceToken: "secret",
-		ServerURL: "http://apicompasso.smresume.com",
+		ServerURL: "http://api.example.test",
 	}
 	if err := configuration.Validate(); err == nil {
 		t.Fatal("remote plain HTTP was accepted")
 	}
-	configuration.ServerURL = "https://apicompasso.smresume.com"
+	configuration.ServerURL = "https://api.example.test"
 	if err := configuration.Validate(); err != nil {
 		t.Fatalf("remote HTTPS rejected: %v", err)
 	}

@@ -12,13 +12,14 @@ Execute estes alvos a partir da raiz do repositório:
 | Objetivo | Comando |
 | --- | --- |
 | Executar todas as verificações locais | `make test` |
+| Validar links locais da documentação | `make test-docs` |
 | Gerar o pacote Debian do cliente | `make package-deb` |
 | Gerar e validar o pacote Debian do cliente | `make test-deb` |
 | Gerar e validar cliente e servidor com a mesma versão | `make package-all` |
 | Gerar o pacote Debian do servidor | `make package-server` |
 | Validar um pacote existente do servidor | `make test-server-package` |
 | Gerar, validar e publicar o servidor | `make publish-server` |
-| Compilar e publicar a interface administrativa | `./scripts/publish-admin-ui.sh` |
+| Compilar e publicar a interface administrativa | `make publish-admin-ui` |
 
 `make package-all` incrementa o sufixo `~pilotN` em
 `packaging/debian/control`. Essa alteração é intencional e permanece no
@@ -135,8 +136,19 @@ teste descritos acima; não duplica internamente suas implementações.
 #### `publish-admin-ui.sh`
 
 Executa `npm run build` em `admin-ui/`, valida o acesso SSH e envia o conteúdo
-gerado em `admin-ui/dist/` para
-`sergio@192.168.18.10:/srv/sites/compasso-admin-ui/`. A publicação usa `scp` e
+de `admin-ui/dist/` para um host já preparado. Destino, diretório remoto e URL
+pública da API podem ser mantidos no arquivo local ignorado
+`.private/deploy/admin-ui.env`. Com esse arquivo configurado uma vez, o fluxo
+rotineiro é somente:
+
+```bash
+make publish-admin-ui
+```
+
+Opções de linha de comando e as variáveis
+`COMPASSO_ADMIN_UI_DEPLOY_TARGET`, `COMPASSO_ADMIN_UI_DEPLOY_DIRECTORY` e
+`COMPASSO_API_BASE_URL` continuam disponíveis para substituir a configuração
+local. Consulte `publish-admin-ui.sh --help`. A publicação usa `scp` e
 substitui arquivos de mesmo nome sem remover artefatos antigos do diretório
 remoto.
 
@@ -191,6 +203,12 @@ automaticamente por nenhum outro script.
 
 ### Verificações do repositório
 
+#### `check-doc-links.sh`
+
+Confere se os links relativos dos arquivos Markdown públicos apontam para
+arquivos ou diretórios existentes. Materiais locais de `.private/` não entram
+nessa validação.
+
 #### `test-migrations.sh`
 
 Aplica, em bancos SQLite temporários, todas as migrações do agente e do servidor
@@ -206,7 +224,7 @@ dos pacotes atuam sobre os `.deb` já montados.
 
 ## Dependências principais
 
-- Go e ferramentas padrão de shell para testes e builds locais;
+- Go, Perl e ferramentas padrão de shell para testes, links e builds locais;
 - Docker e Docker Compose para binários portáteis, validação do Compose e
   execução do servidor;
 - `dpkg`, `dpkg-deb` e `dpkg --validate-version` para pacotes Debian;

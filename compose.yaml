@@ -2,7 +2,7 @@ name: compasso
 
 services:
   compasso-api:
-    image: compasso-api:${COMPASSO_VERSION:-0.1.0-pilot4}
+    image: compasso-api:${COMPASSO_VERSION:-0.1.0-dev}
     build:
       context: .
       dockerfile: server/Dockerfile

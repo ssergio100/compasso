@@ -24,7 +24,9 @@ application_root="${package_root}/opt/compasso-server"
 install -d \
   "${package_root}/DEBIAN" \
   "${package_root}/etc/compasso-server" \
+  "${package_root}/usr/share/doc/compasso-server/third-party" \
   "${application_root}/agent" \
+  "${application_root}/licenses/third-party" \
   "${application_root}/scripts" \
   "${application_root}/docs" \
   "${project_root}/dist"
@@ -39,7 +41,18 @@ install -m 0755 "${project_root}/packaging/server-debian/postinst" \
 
 install -m 0644 "${project_root}/go.mod" "${project_root}/go.sum" \
   "${project_root}/compose.yaml" "${project_root}/.dockerignore" \
+  "${project_root}/LICENSE" "${project_root}/THIRD_PARTY_NOTICES.md" \
   "${application_root}/"
+install -m 0644 "${project_root}"/licenses/third-party/* \
+  "${application_root}/licenses/third-party/"
+install -m 0644 "${project_root}/LICENSE" \
+  "${package_root}/usr/share/doc/compasso-server/LICENSE"
+install -m 0644 "${project_root}/THIRD_PARTY_NOTICES.md" \
+  "${package_root}/usr/share/doc/compasso-server/THIRD_PARTY_NOTICES.md"
+install -m 0644 "${project_root}/packaging/copyright" \
+  "${package_root}/usr/share/doc/compasso-server/copyright"
+install -m 0644 "${project_root}"/licenses/third-party/* \
+  "${package_root}/usr/share/doc/compasso-server/third-party/"
 install -m 0644 "${project_root}/.env.server.example" \
   "${package_root}/etc/compasso-server/compasso.env"
 sed -i "s/^COMPASSO_VERSION=.*/COMPASSO_VERSION=${container_version}/" \

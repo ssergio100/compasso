@@ -35,7 +35,7 @@ dependência de um produto de exposição específico.
 Cloudflare Tunnel, proxy reverso, VPN, acesso somente por LAN ou qualquer outra
 forma de exposição são decisões externas ao servidor Compasso.
 
-## Fases 7 e 8
+## Funcionalidades
 
 O painel implementa login, expiração de sessão, CSRF, dispositivos, cotas
 semanais, rotinas, senha local Argon2id, dashboard e histórico. A API de

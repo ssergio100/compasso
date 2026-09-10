@@ -10,6 +10,9 @@ RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/tempo-server ./ser
 
 FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
 
+LABEL org.opencontainers.image.source="https://github.com/ssergio100/compasso" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -20,6 +23,8 @@ RUN apt-get update \
 
 COPY --from=builder --chown=root:root /out/tempo-server /usr/local/bin/tempo-server
 COPY --chown=root:tempo-server server/config.docker.toml /etc/tempo-server/config.toml
+COPY --chown=root:root LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/compasso-server/
+COPY --chown=root:root licenses/third-party /usr/share/doc/compasso-server/third-party
 
 USER tempo-server:tempo-server
 EXPOSE 8080

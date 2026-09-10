@@ -48,11 +48,22 @@ if [[ ! "${packaged_container_version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]
 fi
 test -f "${package_root}/compose.yaml"
 test -f "${package_root}/README.md"
+test -f "${package_root}/LICENSE"
+test -f "${package_root}/THIRD_PARTY_NOTICES.md"
+test -f "${package_root}/licenses/third-party/godbus-dbus-BSD-3-Clause.txt"
 test -f "${package_root}/docs/atualizacao-manual-servidor.md"
 test -x "${package_root}/scripts/install-server.sh"
 test ! -e "${package_root}/secrets"
 test ! -e "${package_root}/server/config.toml"
 test ! -e "${package_root}/agent/config.toml"
+test -f "${temporary_directory}/root/usr/share/doc/compasso-server/LICENSE"
+test -f "${temporary_directory}/root/usr/share/doc/compasso-server/copyright"
+test -f "${temporary_directory}/root/usr/share/doc/compasso-server/THIRD_PARTY_NOTICES.md"
+if ! grep -Fq 'GNU AFFERO GENERAL PUBLIC LICENSE' \
+  "${temporary_directory}/root/usr/share/doc/compasso-server/LICENSE"; then
+  echo "erro: pacote do servidor não contém o texto da AGPL" >&2
+  exit 1
+fi
 
 if grep -Eqi 'cloudflare|cloudflared|/srv/cloudflare' \
   "${package_root}/scripts/install-server.sh" "${package_root}/compose.yaml"; then

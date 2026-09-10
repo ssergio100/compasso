@@ -56,17 +56,28 @@ bash -n "${project_root}/scripts/restore-server-backup.sh"
 bash -n "${project_root}/scripts/update-server.sh"
 bash -n "${project_root}/scripts/publish-server.sh"
 bash -n "${project_root}/scripts/publish-admin-ui.sh"
+bash -n "${project_root}/scripts/check-doc-links.sh"
+if grep -Eq 'sergio@|192\.168\.' "${project_root}/scripts/publish-admin-ui.sh"; then
+  echo "erro: script de publicação contém destino pessoal" >&2
+  exit 1
+fi
 grep -Fqx 'USER tempo-server:tempo-server' "${dockerfile}"
+grep -Fq 'org.opencontainers.image.licenses="AGPL-3.0-or-later"' "${dockerfile}"
+grep -Fq 'COPY --chown=root:root LICENSE THIRD_PARTY_NOTICES.md' "${dockerfile}"
 if grep -Eq 'server/web/(templates|static)' "${dockerfile}"; then
   echo "erro: imagem da API ainda copia o frontend" >&2
   exit 1
 fi
 grep -Fq 'image: nginx:alpine' "${admin_compose}"
-grep -Fq '/srv/sites/compasso-admin-ui:/usr/share/nginx/html:ro' "${admin_compose}"
+grep -Fq 'COMPASSO_ADMIN_UI_DIRECTORY' "${admin_compose}"
+grep -Fq ':/usr/share/nginx/html:ro' "${admin_compose}"
 grep -Fq 'X-Content-Type-Options "nosniff"' "${admin_nginx}"
 grep -Fq 'X-Frame-Options "DENY"' "${admin_nginx}"
 grep -Fqx '**/config.toml' "${dockerignore}"
 grep -Fqx 'secrets' "${dockerignore}"
+grep -Fq '<project_license>AGPL-3.0-or-later</project_license>' \
+  "${project_root}/packaging/metainfo/br.com.compasso.Compasso.metainfo.xml"
+grep -Fq 'GNU AFFERO GENERAL PUBLIC LICENSE' "${project_root}/LICENSE"
 if command -v docker >/dev/null 2>&1; then
   COMPASSO_DATA_DIRECTORY=/tmp/compasso-compose-validation \
     docker compose --project-directory "${project_root}" config --quiet

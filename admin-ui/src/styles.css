@@ -113,3 +113,5 @@ main#workspace{min-width:0}.workspace-header{height:130px;border-bottom:1px soli
 @media(max-width:600px){.routine-list article{grid-template-columns:30px minmax(0,1fr) 44px 38px 38px}.routine-list .routine-visual{width:25px;height:25px;border-radius:7px}}
 
 .device-state:not(.offline) .connectivity-state{color:#397a55}
+
+.source-footer{display:flex;align-items:center;justify-content:center;gap:7px;padding:0 20px 24px;color:var(--muted);font-size:.67rem}.source-footer a{color:inherit;text-underline-offset:3px}.source-footer a:hover{color:var(--ink)}

@@ -442,8 +442,8 @@ controle remoto como indisponível e não conserva o snapshot remoto apenas em
 memória como prova de autoridade online. A política local durável continua
 operando.
 
-Conectividade e sessão gráfica são dimensões independentes. Encerrar a sessão
-do usuário não encerra o serviço do agente: o computador continua online e
+Conectividade e sessão gráfica são dimensões independentes. Quando a sessão
+do usuário termina, o serviço do agente continua online e
 trocando heartbeats, mas informa `graphical_session_active=false`. Um bloqueio
 remoto permanece pendente até existir uma sessão que possa ser observada como
 bloqueada.

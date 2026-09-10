@@ -5,6 +5,9 @@ O projeto gera dois artefatos instaláveis em `dist/`:
 - `compasso-client_<versão>_amd64.deb`;
 - `compasso-server_<versão>_all.deb`.
 
+O build estático de `admin-ui/` é publicado separadamente e não está contido no
+pacote do servidor.
+
 ## Geração automática
 
 Na raiz do repositório, execute:
@@ -33,9 +36,9 @@ Valide os artefatos com:
 ./scripts/test-debian-package.sh
 ```
 
-O primeiro comando compila `tempo-agent`, `tempo-agent-configure` e
-`compasso-session-logout` em um contêiner Debian. O segundo monta a árvore
-Debian, adiciona os metadados de `packaging/debian/` e chama `dpkg-deb`.
+O primeiro comando compila `tempo-agent` e `tempo-agent-configure` em um
+contêiner Debian. O segundo monta a árvore Debian, adiciona os metadados de
+`packaging/debian/` e chama `dpkg-deb`.
 
 ## Geração manual do servidor
 

@@ -1,8 +1,9 @@
 # Compasso Server — instalação no Debian 13
 
-O pacote Debian instala a API e a interface administrativa em dois contêineres
-independentes, administrados pelo mesmo Docker Compose. Ele não instala nem
-configura túnel, proxy reverso, VPN, DNS, certificado ou firewall.
+O pacote Debian instala o código e as ferramentas operacionais da API. A
+interface administrativa é um build estático independente e não faz parte do
+pacote. Nenhum dos dois configura túnel, proxy reverso, VPN, DNS, certificado
+ou firewall.
 
 ## Instalação
 
@@ -18,28 +19,30 @@ Revise `/etc/compasso-server/compasso.env` e execute:
 sudo /opt/compasso-server/scripts/install-server.sh
 ```
 
-O instalador:
+O instalador da API:
 
 1. verifica Docker Engine e Docker Compose e pede autorização antes de instalar
    uma dependência ausente;
 2. cria os dados em `/srv/docker/volumes/compasso` e os backups em
    `/srv/docker/backups/compasso`;
-3. constrói e inicia API e interface nas portas configuradas;
+3. constrói e inicia a API na porta configurada;
 4. não solicita usuário, senha, domínio ou configuração de infraestrutura.
 
-Por padrão, API e painel escutam em todas as interfaces do host nas portas
-`8181` e `8182`. Em uma rede doméstica, o painel pode ser aberto em
-`http://IP-DO-SERVIDOR:8182`, e o frontend encontra a API automaticamente no
-mesmo IP, porta `8181`.
+Por padrão, a API escuta em todas as interfaces do host na porta `8181`. O
+painel deve ser compilado e servido separadamente conforme
+[`deploy/README.md`](../deploy/README.md); o exemplo usa a porta `8182` e encontra
+a API no mesmo host, porta `8181`.
 
-O arquivo `.env` permite restringir o bind a `127.0.0.1`, trocar portas e
-configurar URLs HTTPS. Essas alterações pertencem à implantação escolhida pelo
-usuário e não fazem parte da instalação do Compasso.
+O arquivo `.env` permite restringir o bind a `127.0.0.1`, trocar a porta,
+escolher os diretórios de dados e backup e configurar a origem administrativa
+e os cookies seguros. HTTPS deve ser terminado pela infraestrutura escolhida
+para a implantação.
 
-Depois da instalação, abra `http://IP-DO-SERVIDOR:8182`. Se o banco ainda não
-possuir administrador, o painel exibe “Configurar o Compasso” para criar usuário
-e senha. A configuração inicial é desativada permanentemente após a criação do
-primeiro acesso. Faça essa etapa antes de publicar o servidor na Internet.
+Depois de implantar também o painel, abra `http://IP-DO-SERVIDOR:8182`. Se o
+banco ainda não possuir administrador, o painel exibe “Configurar o Compasso”
+para criar usuário e senha. A configuração inicial é desativada permanentemente
+após a criação do primeiro acesso. Faça essa etapa antes de publicar o servidor
+na Internet.
 
 ## Operação
 

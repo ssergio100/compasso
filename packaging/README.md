@@ -2,7 +2,7 @@
 
 Artefatos de instalação do cliente Linux.
 
-- `systemd/tempo-agent.service`: unidade do daemon da fase 3, iniciada sem
+- `systemd/tempo-agent.service`: unidade do daemon, iniciada sem
   dependência de rede e reiniciada automaticamente em falhas.
 - `config/tempo-agent.toml`: configuração-base de instalação; o nome da conta
   controlada deve ser substituído antes de habilitar o serviço.
@@ -14,10 +14,9 @@ gráfica de primeira execução. Suas dependências são declaradas no próprio 
 para instalação pelo gerenciador gráfico. Docker não integra o pacote e não é
 uma dependência do cliente.
 
-O pacote também instala `compasso-session-logout` em `/usr/libexec`. O daemon
-o executa no contexto do usuário; ali ele descobre capacidades de logout normal
-no D-Bus. O helper não encerra processos e não identifica o desktop por
-variáveis de ambiente.
+O agente usa `loginctl lock-session` para bloquear a sessão gráfica sem encerrar
+aplicativos. A unidade systemd concede apenas os acessos necessários ao banco,
+ao logind e à API D-Bus local.
 
 Uma instalação nova mantém o serviço desabilitado até a configuração inicial.
 Atualizações preservam e reiniciam clientes já configurados. O assistente é

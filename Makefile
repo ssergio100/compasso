@@ -1,4 +1,4 @@
-.PHONY: all build build-agent build-agent-portable build-server admin-ui-dev package-client package-deb package-server package-all publish-server test-deb test-server-package fmt fmt-check lint test test-go test-ui test-admin-ui test-migrations test-security clean
+.PHONY: all build build-agent build-agent-portable build-server admin-ui-dev package-client package-deb package-server package-all publish-admin-ui publish-server test-deb test-server-package fmt fmt-check lint test test-go test-ui test-admin-ui test-migrations test-security test-docs clean
 
 all: test
 
@@ -30,6 +30,9 @@ package-server:
 
 package-all:
 	./scripts/build-all-debian-packages.sh
+
+publish-admin-ui:
+	./scripts/publish-admin-ui.sh
 
 publish-server:
 	./scripts/publish-server.sh
@@ -70,7 +73,10 @@ test-migrations:
 test-security:
 	./scripts/test-security-packaging.sh
 
-test: lint test-go test-ui test-admin-ui test-migrations test-security build
+test-docs:
+	./scripts/check-doc-links.sh
+
+test: lint test-go test-ui test-admin-ui test-migrations test-security test-docs build
 
 clean:
 	rm -rf ./bin ./dist
